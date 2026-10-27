@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Batches — display code + label wireframe</title>
+<style>
+  :root{
+    --ink:#111318; --sub:#6b7280; --line:#e5e7eb; --bg:#ffffff;
+    --pill-bg:#eef0f3; --pill-ink:#374151;
+    --proc-bg:#fdead1; --proc-ink:#9a5b12;
+    --link:#3b5bdb; --btn-line:#c7d2fe; --btn-ink:#3b5bdb;
+    --danger:#e0464f; --ann-bg:#fffbe6; --ann-line:#e0c000; --ann-ink:#6b5900;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; padding:40px 16px 80px; background:#f3f4f6;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    color:var(--ink);
+  }
+  .banner{
+    max-width:900px; margin:0 auto 24px; padding:14px 18px;
+    background:var(--ann-bg); border:1px dashed var(--ann-line);
+    border-radius:8px; color:var(--ann-ink); font-size:13.5px; line-height:1.55;
+  }
+  .banner b{color:#4a3f00;}
+  .card{
+    max-width:900px; margin:0 auto; background:var(--bg);
+    border-radius:14px; padding:32px 32px 12px;
+    box-shadow:0 1px 2px rgba(0,0,0,.04);
+  }
+  h1{font-size:28px; margin:0 0 6px; display:flex; align-items:center; gap:10px;}
+  .live{
+    display:inline-flex; align-items:center; gap:5px;
+    font-size:11px; font-weight:700; color:#16a34a; letter-spacing:.03em;
+  }
+  .live::before{content:""; width:7px; height:7px; border-radius:50%; background:#16a34a;}
+  .sub{color:var(--sub); font-family:ui-monospace,Menlo,monospace; font-size:13px; margin:0 0 10px;}
+  .viewall{color:var(--link); font-size:14px; text-decoration:none; display:inline-block; margin-bottom:24px;}
+  table{width:100%; border-collapse:collapse; font-size:14px;}
+  thead th{
+    text-align:left; font-size:11px; letter-spacing:.04em; color:#374151;
+    text-transform:uppercase; background:#f4f5f7; padding:12px 14px;
+  }
+  tbody td{padding:16px 14px; vertical-align:middle;}
+  tbody tr.row{border-bottom:1px solid var(--line);}
+  tbody tr.row:last-of-type{border-bottom:none;}
+  .batch-label{font-weight:600; font-size:14.5px;}
+  .batch-code{color:var(--sub); font-family:ui-monospace,Menlo,monospace; font-size:12px; margin-top:2px;}
+  .pencil{color:#9ca3af; margin-left:4px; font-size:12px;}
+  .pill{
+    display:inline-block; padding:4px 10px; border-radius:999px;
+    background:#dcf5e3; color:#158a3f; font-size:11px; font-weight:700; letter-spacing:.03em;
+  }
+  .pill.proc{background:var(--proc-bg); color:var(--proc-ink);}
+  .actions{display:flex; gap:8px; align-items:center;}
+  .btn{
+    border:1px solid var(--btn-line); color:var(--btn-ink); background:#fff;
+    padding:7px 12px; border-radius:7px; font-size:12.5px; font-weight:600; white-space:nowrap;
+  }
+  .btn.disabled{color:#9ca3af; border-color:#e5e7eb; cursor:not-allowed;}
+  .trash{
+    width:32px; height:32px; border-radius:7px; border:1px solid #f3c6c9;
+    display:flex; align-items:center; justify-content:center; color:var(--danger); font-size:14px;
+  }
+  .trash.disabled{color:#d1d5db; border-color:#eee;}
+  tr.annotation td{
+    padding:0 14px 18px; border-bottom:1px solid var(--line);
+  }
+  tr.annotation:last-of-type td{border-bottom:none;}
+  .callout{
+    background:var(--ann-bg); border:1px dashed var(--ann-line); color:var(--ann-ink);
+    border-radius:7px; padding:9px 12px; font-size:12.5px; line-height:1.5;
+  }
+  .callout b{color:#4a3f00;}
+  .footer-note{max-width:900px; margin:26px auto 0; color:#8a8f98; font-size:12px; text-align:center;}
+</style>
+</head>
+<body>
+
+  <div class="banner">
+    <b>What changed:</b> the batch number ("#N") is replaced by two things — an editable <b>label</b> (e.g. "Morning Invoice Batch") when you've renamed it, and underneath, a short <b>random display code</b> (e.g. <code>B4X7K2</code>) that never reveals how many batches were created or deleted. The database's real internal ID still exists behind the scenes for foreign keys — this only changes what you see.
+  </div>
+
+  <div class="card">
+    <h1>Batches <span class="live">LIVE</span></h1>
+    <div class="sub">Batch upload status</div>
+    <a class="viewall" href="#">View all processed documents →</a>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:26%">Batch</th>
+          <th style="width:14%">Status</th>
+          <th style="width:14%">Documents</th>
+          <th style="width:20%">Created</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+
+        <tr class="row">
+          <td>
+            <div class="batch-label">Morning Invoice Batch <span class="pencil">✎</span></div>
+            <div class="batch-code">B4X7K2</div>
+          </td>
+          <td><span class="pill">COMPLETE</span></td>
+          <td>3 / 3</td>
+          <td>18 Sept 2026 09:10</td>
+          <td class="actions">
+            <span class="btn">View dashboard</span>
+            <span class="btn">View results</span>
+            <span class="trash">🗑</span>
+          </td>
+        </tr>
+        <tr class="annotation">
+          <td colspan="5">
+            <div class="callout"><b>Labelled batch</b> — once renamed, the label shows first and larger; the random code stays visible underneath as a quiet secondary reference, not the headline.</div>
+          </td>
+        </tr>
+
+        <tr class="row">
+          <td>
+            <div class="batch-label">B9F2A1 <span class="pencil">✎</span></div>
+          </td>
+          <td><span class="pill">COMPLETE</span></td>
+          <td>2 / 2</td>
+          <td>18 Sept 2026 08:42</td>
+          <td class="actions">
+            <span class="btn">View dashboard</span>
+            <span class="btn">View results</span>
+            <span class="trash">🗑</span>
+          </td>
+        </tr>
+        <tr class="annotation">
+          <td colspan="5">
+            <div class="callout"><b>No label set</b> — the random code is shown by itself as the batch's name. Notice it doesn't follow "6" after 5 batches were deleted above it — there's no visible sequence to give away batch history.</div>
+          </td>
+        </tr>
+
+        <tr class="row">
+          <td>
+            <div class="batch-label">B1M8Q4 <span class="pencil">✎</span></div>
+          </td>
+          <td><span class="pill proc">PROCESSING</span></td>
+          <td>1 / 3+</td>
+          <td>18 Sept 2026 10:04</td>
+          <td class="actions">
+            <span class="btn">View dashboard</span>
+            <span class="btn disabled" title="Cancel this batch before deleting it">View results</span>
+            <span class="trash disabled" title="Cancel this batch before deleting it">🗑</span>
+          </td>
+        </tr>
+        <tr class="annotation">
+          <td colspan="5">
+            <div class="callout"><b>Still processing</b> — delete stays disabled (tooltip explains why) until the batch is cancelled or finishes, same guardrail as before — that part isn't changing, just the naming above it.</div>
+          </td>
+        </tr>
+
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footer-note">Wireframe only — spacing, icons and copy are approximate. Not wired to live data.</div>
+
+</body>
+</html>

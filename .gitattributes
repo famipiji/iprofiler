@@ -1,0 +1,8 @@
+# Force LF line endings for files Docker/Linux containers execute directly,
+# regardless of a developer machine's core.autocrlf setting. Without this,
+# a Windows checkout with autocrlf=true silently converts these to CRLF,
+# which breaks the shebang line (e.g. "#!/bin/sh\r") and makes the container
+# fail with a confusing "exec ...: no such file or directory" at startup.
+*.sh text eol=lf
+Dockerfile text eol=lf
+entrypoint.sh text eol=lf

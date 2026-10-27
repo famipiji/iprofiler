@@ -1,0 +1,62 @@
+services:
+  vaultmind:
+    build: .
+    image: dcsadmin01/vaultmind
+    container_name: vaultmind
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./instance:/app/instance
+      # Bind-mounted (not baked-in) so template edits show up without a
+      # rebuild during local dev. Requires ./templates to exist and be
+      # populated on the host -- if it's missing/empty this shadows the
+      # image's built-in templates/index.html. entrypoint.sh checks for
+      # that and fails the container loudly instead of serving a blank app.
+      # If you don't need hot-reload, delete this line and rely on the
+      # image's baked-in copy instead.
+      - ./templates:/app/templates
+      # PaddleOCR downloads its models here on first use; without a named
+      # volume every container rebuild re-downloads them.
+      - paddle_models:/root/.paddlex
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:1234/v1
+      - OLLAMA_MODEL=qwen/qwen3-vl-8b
+      - LLM_API_KEY=lm-studio
+      - SQLALCHEMY_DATABASE_URI=mysql+pymysql://iprofiler_user:P%40ssw0rd@host.docker.internal:3306/dms_iprofiler
+      - OCR_ENGINE=paddle
+      - PADDLE_OCR_LANG=en
+      # TESSERACT_CMD - leave unset here; the container's tesseract-ocr package is
+      # already on PATH. Only needed for local Windows dev (see ocr_service.py).
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  batch-worker:
+    build: .
+    image: dcsadmin01/vaultmind
+    container_name: vaultmind-batch-worker
+    # Bypasses entrypoint.sh (which starts waitress-serve for the web app and
+    # requires the ./templates bind mount) - the worker only claims queued
+    # DocumentJob rows from MySQL and never serves HTTP or renders templates.
+    entrypoint: []
+    command: ["python", "batch_worker.py"]
+    volumes:
+      - ./uploads:/app/uploads
+      - paddle_models:/root/.paddlex
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:1234/v1
+      - OLLAMA_MODEL=qwen/qwen3-vl-8b
+      - LLM_API_KEY=lm-studio
+      - SQLALCHEMY_DATABASE_URI=mysql+pymysql://iprofiler_user:P%40ssw0rd@host.docker.internal:3306/dms_iprofiler
+      - OCR_ENGINE=paddle
+      - PADDLE_OCR_LANG=en
+    restart: unless-stopped
+
+volumes:
+  paddle_models:
+

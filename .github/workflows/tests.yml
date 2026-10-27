@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run tests
+        env:
+          # No live LM Studio/MySQL in CI - qwen_service.py only needs a
+          # syntactically valid URL to import cleanly (it doesn't connect at
+          # import time). test_connection.py/test_qwen.py are excluded below
+          # since they're meant to fail loudly against a real backend, not
+          # run in CI where none exists.
+          OLLAMA_BASE_URL: "http://127.0.0.1:1/v1"
+          LLM_API_KEY: "ci-placeholder"
+        # test_ocr_service.py mocks PaddleOCR and pytesseract, so no OCR models
+        # are downloaded and no tesseract binary is needed here.
+        run: pytest test_core_logic.py test_rag_tenant_isolation.py test_ocr_service.py -v

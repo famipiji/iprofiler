@@ -1,0 +1,93 @@
+[
+  {
+    "index": 1,
+    "format": "Code 39",
+    "box": [
+      1096,
+      289,
+      1695,
+      342
+    ],
+    "zxing_ground_truth": "FAC 2510385V",
+    "ai_reads": "UNREADABLE",
+    "match": false
+  },
+  {
+    "index": 2,
+    "format": "Code 128",
+    "box": [
+      1331,
+      493,
+      1648,
+      533
+    ],
+    "zxing_ground_truth": "082614010184",
+    "ai_reads": "TSH WKS1",
+    "match": false
+  },
+  {
+    "index": 3,
+    "format": "Code 39",
+    "box": [
+      3343,
+      373,
+      3456,
+      1079
+    ],
+    "zxing_ground_truth": "MOEQEH2500007341",
+    "ai_reads": "UNREADABLE",
+    "match": false
+  },
+  {
+    "index": 4,
+    "format": "Code 39",
+    "box": [
+      466,
+      1592,
+      1156,
+      1641
+    ],
+    "zxing_ground_truth": "MOEQEH2500007341",
+    "ai_reads": "MOFOEH2500007341",
+    "match": false
+  },
+  {
+    "index": 5,
+    "format": "QR Code",
+    "box": [
+      3352,
+      1679,
+      3463,
+      1790
+    ],
+    "zxing_ground_truth": "MOEQEH2500007341",
+    "ai_reads": "UNREADABLE",
+    "match": false
+  },
+  {
+    "index": 6,
+    "format": "QR Code",
+    "box": [
+      464,
+      1715,
+      729,
+      1977
+    ],
+    "zxing_ground_truth": "MOEQEH2500007341",
+    "ai_reads": "UNREADABLE",
+    "match": false
+  },
+  {
+    "index": 7,
+    "format": "QR Code",
+    "box": [
+      2881,
+      1706,
+      3039,
+      1861
+    ],
+    "zxing_ground_truth": "TSHWKS1260820260184",
+    "ai_reads": "UNREADABLE",
+    "match": false
+  }
+]

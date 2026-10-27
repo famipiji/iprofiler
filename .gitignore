@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+*.tar
+vaultmind_backup.tar
+
+# Local data - never commit (real customer documents / DB / generated files)
+uploads/
+instance/
+*.db
+exports/
+searchable_pdf_cache/
+chroma_db/
+ocr_benchmark_results.json
+
+# Local environment / secrets
+.env
+venv/
+.venv/
+.pytest_cache/
+.claude/settings.local.json
