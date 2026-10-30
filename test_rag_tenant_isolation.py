@@ -40,25 +40,30 @@ fake_sentence_transformers.SentenceTransformer = _PlaceholderSentenceTransformer
 # rag_service imports chromadb/sentence_transformers at its own module level,
 # so these stubs must already be in sys.modules by the time `import
 # rag_service` below runs - too early for a normal pytest fixture (fixtures
-# only run once this module has already finished importing). Use
-# patch.dict's start()/stop() instead of a raw sys.modules mutation, so the
-# stubs are properly removed in tearDownModule() rather than leaking into
-# every other test that happens to run afterward in the same pytest session.
-_sys_modules_patcher = patch.dict(sys.modules, {
+# only run once this module has already finished importing). tearDownModule()
+# restores only these keys. (patch.dict.stop() would restore the *whole*
+# sys.modules snapshot, evicting modules that later test files imported during
+# pytest collection - e.g. ocr_service - so their monkeypatches stop applying.)
+_STUBS = {
     "chromadb": fake_chromadb,
     "chromadb.config": fake_config,
     "sentence_transformers": fake_sentence_transformers,
-})
-_sys_modules_patcher.start()
+}
+_saved_modules = {name: sys.modules.get(name) for name in _STUBS}
+sys.modules.update(_STUBS)
 
 import rag_service
 
 
 def tearDownModule():
-    """Restores sys.modules to what it was before this file's stubs were
-    installed, so a later test module that imports the real chromadb/
-    sentence_transformers doesn't silently get these no-op fakes instead."""
-    _sys_modules_patcher.stop()
+    """Puts back whatever chromadb/sentence_transformers entries existed before
+    the stubs, so a later test module that imports the real libraries doesn't
+    silently get these no-op fakes instead."""
+    for name, original in _saved_modules.items():
+        if original is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = original
 
 
 class FakeEmbedder:
