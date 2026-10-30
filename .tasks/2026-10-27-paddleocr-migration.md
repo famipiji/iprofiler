@@ -1,6 +1,6 @@
 # iProfiler — Tesseract → PaddleOCR Migration — 2026-10-27
 
-## STATUS: In Progress — Tasks 1–6 done (UI checks + Tesseract comparison pending); next: Task 7 (optional) or Task 8
+## STATUS: In Progress — Tasks 1–6 done (UI checks + Tesseract comparison pending); Task 7 option A implemented (A/B pending); next: Task 7 A/B, then Task 8
 
 Not from the Notion backlog — a scoped engine swap. Run tasks **in order, one at a time**;
 each ends with a **Verify** step that must pass before starting the next. Commit after
@@ -415,6 +415,34 @@ Only do this if Task 6's benchmark shows PaddleOCR text is clean on your documen
    `_fix_odl_rtl_line_order`. Keep Qwen as the text source for Jawi docs.
 4. **Verify:** A/B on 10 scanned docs — compare extracted fields and total processing time
    with the flag on vs off.
+
+**Result (2026-10-30): ✅ Option A implemented + unit-tested — A/B pending (needs LM Studio)**. Option B not done.
+- `qwen_service.py`: new `OCR_PRETEXT_HINT` (default **off**; `1/true/yes/on` enables), `OCR_PRETEXT_MAX_CHARS`
+  (default 6000, cut on a line boundary). Helpers `_ocr_hint_for_image`, `_ocr_hint_for_path`, `_ocr_hints_for_pdf`,
+  `_with_ocr_hint`. The hint is wrapped in `<<<OCR … OCR>>>` and placed before the prompt, with "the image is
+  the authority" + "keep the output format" instructions.
+- Where it's applied (every Qwen *transcription* call, never the tiny classify-only call):
+  - scanned PDF, multi-page: page 1 `combined_prompt` and each page 2+ `ocr_only_prompt` — **each page gets its
+    own hint**;
+  - scanned PDF, single page + every image upload: `classify_and_extract_combined_vision(..., ocr_hint=)` — all
+    three of its transcription prompts (text-only, table-type, combined OCR+fields).
+  - `extract_text_from_image()` (~1110, named in the plan) is not called anywhere any more, so it was left alone.
+- Scanned pages are rendered for OCR once at **200 DPI** (`OCR_PRETEXT_PDF_DPI`), not at the 150→72 DPI the
+  Vision retry loop sends — hints are computed once, outside that loop.
+- **Weak-OCR guard (covers Jawi):** a page gets no hint if its OCR text is < 20 chars or mean line conf < 0.80
+  (the English model on Jawi/bad scans). OCR errors never fail processing — they just mean no hint. Logs:
+  `[OCR-Hint] page 2: 41 lines, mean conf 0.97 (3.9s)` / `… skipped - …`.
+- Cost when on: one extra local OCR pass per page (~1–5 s/page on CPU, from Task 6), run before the Vision calls;
+  the prompt grows by up to ~6000 chars. Flag off = byte-identical prompts to before (tested).
+- `test_ocr_hint.py` (new, 20 tests, in `tests.yml`): flag parsing, conf/length guard, OCR failure, truncation,
+  per-page PDF hints (fake PyMuPDF), prompt wrapping, all 3 combined-call paths, and `process_document()` run up to
+  the end of OCR for a 3-page scan (page 2 hint-less), a 1-page scan, an image, and flag off. Mutation-checked
+  (wrong page's hint, missing image hint, removed conf guard, removed combined-prompt hint each fail a test).
+  `test_ocr_hint.py` + `test_ocr_service.py`: 35 passed. `test_core_logic.py` not re-run (no sqlalchemy where tested).
+- `docker-compose.yml`: `OCR_PRETEXT_HINT=0` on both services. Windows: `set OCR_PRETEXT_HINT=1` before `python app.py`.
+- **A/B to do (needs LM Studio reachable):** run the app with `OCR_PRETEXT_HINT=0`, upload ~10 scanned docs (include a
+  multi-page one, one with small print, one Jawi if you have it), note fields + total time from the `[Pipeline]` logs;
+  restart with `OCR_PRETEXT_HINT=1`, upload the same files, compare. Keep it on only if fields are as good or better.
 
 ---
 

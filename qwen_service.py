@@ -213,6 +213,101 @@ TEXT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-vl-32b-instruct")
 # ultimately bound how many concurrent requests hit the same model server.
 _PAGE_CONCURRENCY = max(1, int(os.environ.get("MAX_CONCURRENT_UPLOADS", "2")))
 
+
+# -- OCR text as a hint for Qwen (PaddleOCR migration, Task 7, option A) -----
+# OCR_PRETEXT_HINT=1 runs the local OCR engine (ocr_service, PaddleOCR by
+# default) on each scanned PDF page / uploaded image first, and adds its text
+# to the Vision transcription prompt as "reference OCR text". Qwen still sees
+# the image and stays the source of raw_text; the OCR text is only a crutch for
+# small or faint fonts. Off by default until the A/B in the task file is done.
+OCR_PRETEXT_HINT = os.environ.get("OCR_PRETEXT_HINT", "0").strip().lower() in ("1", "true", "yes", "on")
+# Keeps the hint from crowding out the model's context window on dense pages.
+OCR_PRETEXT_MAX_CHARS = int(os.environ.get("OCR_PRETEXT_MAX_CHARS", "6000"))
+# Pages whose OCR is weak get no hint at all: the English model on a Jawi page
+# or a very bad scan returns garbage that would mislead Qwen more than help it.
+OCR_PRETEXT_MIN_CHARS = 20
+OCR_PRETEXT_MIN_MEAN_CONF = 0.80
+# Scanned pages are rendered for OCR at this DPI (independent of the lower
+# DPI/size the Vision retry loop sends to Qwen) - small print needs the pixels.
+OCR_PRETEXT_PDF_DPI = 200
+
+
+def _ocr_hint_for_image(img, label: str = "image") -> str:
+    """OCR text of one page image for use as a Qwen prompt hint, or "" when
+    the hint is off, OCR fails, or the OCR result looks too weak to trust.
+    Never raises - a missing hint must never fail document processing."""
+    if not OCR_PRETEXT_HINT:
+        return ""
+    t0 = time.time()
+    try:
+        from ocr_service import ocr_lines
+        lines = ocr_lines(img)
+    except Exception as e:
+        print(f"[OCR-Hint] {label}: OCR failed, no hint ({e})")
+        return ""
+    text = "\n".join(ln["text"] for ln in lines).strip()
+    confs = [ln["conf"] for ln in lines if ln.get("conf") is not None]
+    mean_conf = sum(confs) / len(confs) if confs else 0.0
+    dt = time.time() - t0
+    if len(text) < OCR_PRETEXT_MIN_CHARS or mean_conf < OCR_PRETEXT_MIN_MEAN_CONF:
+        print(f"[OCR-Hint] {label}: skipped - {len(text)} chars, mean conf {mean_conf:.2f} ({dt:.1f}s)")
+        return ""
+    truncated = ""
+    if len(text) > OCR_PRETEXT_MAX_CHARS:
+        cut = text[:OCR_PRETEXT_MAX_CHARS]
+        text = cut.rsplit("\n", 1)[0] if "\n" in cut else cut
+        truncated = f", truncated to {len(text)}"
+    print(f"[OCR-Hint] {label}: {len(lines)} lines, mean conf {mean_conf:.2f}{truncated} ({dt:.1f}s)")
+    return text
+
+
+def _ocr_hint_for_path(image_path: str) -> str:
+    """_ocr_hint_for_image() for an uploaded image file."""
+    if not OCR_PRETEXT_HINT:
+        return ""
+    try:
+        with Image.open(image_path) as img:
+            img.load()
+            return _ocr_hint_for_image(img, "image")
+    except Exception as e:
+        print(f"[OCR-Hint] image: could not open, no hint ({e})")
+        return ""
+
+
+def _ocr_hints_for_pdf(pdf_path: str) -> list:
+    """One hint string per page ("" for pages without a usable hint), or []
+    when the hint is off or the PDF can't be rendered."""
+    if not OCR_PRETEXT_HINT:
+        return []
+    try:
+        import fitz
+        hints = []
+        zoom = OCR_PRETEXT_PDF_DPI / 72.0
+        with fitz.open(pdf_path) as doc:
+            for page_num, page in enumerate(doc, start=1):
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+                img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                hints.append(_ocr_hint_for_image(img, f"page {page_num}"))
+        return hints
+    except Exception as e:
+        print(f"[OCR-Hint] PDF render failed, no hints ({e})")
+        return []
+
+
+def _with_ocr_hint(prompt: str, hint: str) -> str:
+    """Prepend the reference OCR text to a Vision transcription prompt."""
+    if not hint:
+        return prompt
+    return (
+        "Reference OCR text for this page, from a separate OCR engine (may contain errors):\n"
+        "<<<OCR\n" + hint + "\nOCR>>>\n"
+        "Use the reference text only to help read small, faint or unclear text. "
+        "The image is the authority: where the reference text disagrees with the image, "
+        "follow the image. Do not copy the reference text blindly, and keep exactly the "
+        "output format asked for below.\n\n"
+        + prompt
+    )
+
 # Split-PDF pipelines (process_split_pdf, process_barcode_split_pdf,
 # detect_separator_groups) run one sequential LLM call per page with no
 # other bound -- a very large PDF could take many minutes and hold
@@ -1989,7 +2084,7 @@ def extract_fields_vision(b64: str, media_type: str, document_type: str, raw_tex
         return {}
 
 
-def classify_and_extract_combined_vision(b64: str, media_type: str, forced_document_type: str = None) -> dict:
+def classify_and_extract_combined_vision(b64: str, media_type: str, forced_document_type: str = None, ocr_hint: str = "") -> dict:
     """
     Single-page fast path: a cheap classify-only call, then ONE combined
     Vision call for OCR text + structured fields together -- collapses what
@@ -2012,6 +2107,9 @@ def classify_and_extract_combined_vision(b64: str, media_type: str, forced_docum
       side-by-side testing (2026-08-21) showed table extraction quality is
       inconsistent when merged into the same call as OCR -- see the
       has_table_field branch below for the actual before/after numbers.
+
+    ocr_hint: reference OCR text (OCR_PRETEXT_HINT) prepended to the
+    transcription prompts below, not to the classify-only call.
 
     Returns {"document_type", "raw_text", "fields", "fields_reliable"}.
     fields_reliable=False means the caller should fall back to today's
@@ -2065,7 +2163,7 @@ def classify_and_extract_combined_vision(b64: str, media_type: str, forced_docum
         # No try/except here either -- same reasoning as the classify-only
         # call above: let a resolution-related failure propagate to the
         # caller's retry loop instead of silently returning an empty result.
-        response = call_qwen_vision(b64, media_type, DEFAULT_COMBINED_TEXT_ONLY_PROMPT, max_tokens=16000)
+        response = call_qwen_vision(b64, media_type, _with_ocr_hint(DEFAULT_COMBINED_TEXT_ONLY_PROMPT, ocr_hint), max_tokens=16000)
         raw_text = clean_qwen_output(response)
         return {"document_type": document_type, "raw_text": raw_text, "fields": {}, "fields_reliable": True}
 
@@ -2080,7 +2178,7 @@ def classify_and_extract_combined_vision(b64: str, media_type: str, forced_docum
         # for the actual field/table extraction, same as the null_ratio
         # fallback below just triggered unconditionally for this type.
         print(f"[Combined] '{document_type}' has a table field ??? OCR-only, deferring extraction to extract_fields_vision() (table quality)")
-        response = call_qwen_vision(b64, media_type, DEFAULT_COMBINED_TEXT_ONLY_PROMPT, max_tokens=16000)
+        response = call_qwen_vision(b64, media_type, _with_ocr_hint(DEFAULT_COMBINED_TEXT_ONLY_PROMPT, ocr_hint), max_tokens=16000)
         raw_text = clean_qwen_output(response)
         return {"document_type": document_type, "raw_text": raw_text, "fields": {}, "fields_reliable": False}
 
@@ -2111,7 +2209,7 @@ def classify_and_extract_combined_vision(b64: str, media_type: str, forced_docum
     # oversized-image failure needs to reach the caller's resolution-retry
     # loop, not be swallowed into an empty "unreliable" result here (that
     # would skip the retry entirely and go straight to a worse fallback).
-    response = call_qwen_vision(b64, media_type, prompt, max_tokens=20000)
+    response = call_qwen_vision(b64, media_type, _with_ocr_hint(prompt, ocr_hint), max_tokens=20000)
     raw = clean_qwen_output(response)
     print(f"[Combined] Response length: {len(raw)} chars")
 
@@ -3443,6 +3541,13 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                 "Output ONLY the transcribed text, nothing else."
             )
 
+            # OCR_PRETEXT_HINT: local OCR text per page, computed once (not per
+            # DPI retry). [] when the flag is off -> every hint is "".
+            _page_hints = _ocr_hints_for_pdf(image_path)
+
+            def _page_hint(page_num):
+                return _page_hints[page_num - 1] if 0 < page_num <= len(_page_hints) else ""
+
             for dpi_try, dim_try in [(150, 1200), (100, 900), (72, 700), (72, 512), (72, 384)]:
                 try:
                     ocr_pages = pdf_pages_to_b64(image_path, dpi=dpi_try, max_dim=dim_try)
@@ -3465,6 +3570,7 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                         _set_lm_slot("Classifying + extracting...", 0.0, _ocr_per_page)
                         _combined = classify_and_extract_combined_vision(
                             ocr_pages[0][0], "image/jpeg", forced_document_type=forced_document_type,
+                            ocr_hint=_page_hint(1),
                         )
                         document_type = _combined["document_type"]
                         page1_text = _combined["raw_text"]
@@ -3474,7 +3580,7 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                     else:
                         # Page 1: classify + OCR together
                         _set_lm_slot(f"OCR page 1/{_n_pages}...", 0.0, _ocr_per_page)
-                        result = call_qwen_vision(ocr_pages[0][0], "image/jpeg", combined_prompt, max_tokens=16000)
+                        result = call_qwen_vision(ocr_pages[0][0], "image/jpeg", _with_ocr_hint(combined_prompt, _page_hint(1)), max_tokens=16000)
                         result = clean_qwen_output(result)
                         print(f"[Pipeline] Page 1 classify+OCR at {dpi_try} DPI: {len(result)} chars")
 
@@ -3502,14 +3608,15 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                     remaining_pages = list(enumerate(ocr_pages[1:], start=2))
                     page_results = {}
 
-                    def _ocr_one_page(page_b64, page_mt):
-                        text = call_qwen_vision(page_b64, page_mt, ocr_only_prompt, max_tokens=16000)
+                    def _ocr_one_page(page_b64, page_mt, page_num):
+                        prompt = _with_ocr_hint(ocr_only_prompt, _page_hint(page_num))
+                        text = call_qwen_vision(page_b64, page_mt, prompt, max_tokens=16000)
                         return clean_qwen_output(text)
 
                     if remaining_pages:
                         with ThreadPoolExecutor(max_workers=_PAGE_CONCURRENCY, thread_name_prefix="page-ocr") as _page_pool:
                             futures = {
-                                _page_pool.submit(_ocr_one_page, page_b64, page_mt): page_num
+                                _page_pool.submit(_ocr_one_page, page_b64, page_mt, page_num): page_num
                                 for page_num, (page_b64, page_mt, _pw, _ph) in remaining_pages
                             }
                             pages_completed = 0
@@ -3583,11 +3690,12 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
         image_b64 = None
         media_type = None
         _set_lm_slot("Classifying + extracting...", 0.0, 2.0)
+        _img_hint = _ocr_hint_for_path(image_path)  # "" unless OCR_PRETEXT_HINT=1
         for _sz, _q in [(1024, 85), (768, 75), (512, 70), (384, 60)]:
             try:
                 b64, mt, _, _ = encode_image(image_path, max_size=_sz, quality=_q)
                 print(f"[Pipeline] Trying vision at {_sz}px q={_q} ({len(b64)//1024}KB)...")
-                _combined = classify_and_extract_combined_vision(b64, mt, forced_document_type=forced_document_type)
+                _combined = classify_and_extract_combined_vision(b64, mt, forced_document_type=forced_document_type, ocr_hint=_img_hint)
                 image_b64 = b64
                 media_type = mt
                 break

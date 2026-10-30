@@ -26,6 +26,8 @@ services:
       - SQLALCHEMY_DATABASE_URI=mysql+pymysql://iprofiler_user:P%40ssw0rd@host.docker.internal:3306/dms_iprofiler
       - OCR_ENGINE=paddle
       - PADDLE_OCR_LANG=en
+      # 1 = add local OCR text to Qwen's prompts as a reference (off until A/B'd)
+      - OCR_PRETEXT_HINT=0
       # TESSERACT_CMD - leave unset here; the container's tesseract-ocr package is
       # already on PATH. Only needed for local Windows dev (see ocr_service.py).
     restart: unless-stopped
@@ -55,6 +57,8 @@ services:
       - SQLALCHEMY_DATABASE_URI=mysql+pymysql://iprofiler_user:P%40ssw0rd@host.docker.internal:3306/dms_iprofiler
       - OCR_ENGINE=paddle
       - PADDLE_OCR_LANG=en
+      # 1 = add local OCR text to Qwen's prompts as a reference (off until A/B'd)
+      - OCR_PRETEXT_HINT=0
     restart: unless-stopped
 
 volumes:

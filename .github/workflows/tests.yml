@@ -33,4 +33,4 @@ jobs:
           LLM_API_KEY: "ci-placeholder"
         # test_ocr_service.py mocks PaddleOCR and pytesseract, so no OCR models
         # are downloaded and no tesseract binary is needed here.
-        run: pytest test_core_logic.py test_rag_tenant_isolation.py test_ocr_service.py -v
+        run: pytest test_core_logic.py test_rag_tenant_isolation.py test_ocr_service.py test_ocr_hint.py -v
