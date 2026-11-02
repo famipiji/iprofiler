@@ -3702,6 +3702,11 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                     print(f"[Pipeline] Classified as: {document_type} | Total OCR: {len(raw_text)} chars ({len(ocr_pages)} pages)")
                     ocr_done = True
                     break
+                except QwenServiceUnavailableError:
+                    # The model gave no usable answer (thinking model, cut off at
+                    # max_tokens, LM Studio down after retries) - a smaller image
+                    # won't fix that, and each retry can burn minutes of tokens.
+                    raise
                 except Exception as ocr_err:
                     print(f"[Pipeline] Combined call at {dpi_try} DPI failed: {ocr_err}, trying lower resolution...")
 

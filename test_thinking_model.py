@@ -55,3 +55,49 @@ def test_non_stream_reasoning_only_raises():
 
 def test_non_stream_normal_answer():
     assert qs._message_text(_completion("  invoice  "), "test") == "invoice"
+
+
+# -- scanned-PDF path must not retry a "no answer" at lower resolutions -------
+
+def _scanned_pipeline(monkeypatch, n_pages, vision):
+    monkeypatch.setattr(qs, "is_scanned_pdf", lambda p: True)
+    monkeypatch.setattr(qs, "pdf_pages_to_b64", lambda p, dpi=150, max_dim=1240: [
+        (f"page{i}", "image/jpeg", 100, 100) for i in range(1, n_pages + 1)])
+    monkeypatch.setattr(qs, "get_all_active_doc_type_names", lambda: ["invoice"])
+    monkeypatch.setattr(qs, "_build_vision_extraction_hints", lambda t, raw_text=None: ([], "", ""))
+    monkeypatch.setattr(qs, "_ocr_hints_for_pdf", lambda p: [])
+    monkeypatch.setattr(qs, "call_qwen_vision", vision)
+
+
+@pytest.mark.parametrize("n_pages", [1, 3])
+def test_scanned_no_answer_is_not_retried_at_lower_dpi(monkeypatch, n_pages):
+    calls = []
+
+    def _no_answer(*a, **k):
+        calls.append(1)
+        raise qs.QwenServiceUnavailableError("call_qwen_vision: model returned no answer")
+
+    _scanned_pipeline(monkeypatch, n_pages, _no_answer)
+    with pytest.raises(qs.QwenServiceUnavailableError, match="no answer"):
+        qs.process_document("scan.pdf")
+    assert len(calls) == 1          # not once per DPI step (5)
+
+
+def test_scanned_other_errors_still_retry_at_lower_dpi(monkeypatch):
+    calls = []
+
+    class _Stop(Exception):
+        pass
+
+    def _too_big_then_stop(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("image too large")    # generic error -> next DPI
+        raise _Stop()
+
+    _scanned_pipeline(monkeypatch, 3, _too_big_then_stop)
+    try:
+        qs.process_document("scan.pdf")
+    except Exception:
+        pass
+    assert len(calls) >= 2          # retried at a lower resolution
