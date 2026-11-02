@@ -81,5 +81,7 @@
     "education",
     "skills",
     "certifications"
-  ]
+  ],
+  "buku": [],
+  "bank_statement": []
 }

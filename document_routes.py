@@ -1458,6 +1458,11 @@ def update_document(doc_id):
             # SAME type - e.g. after fixing that type's field list, this is
             # how the user retries extraction without a pointless rename
             # away-and-back round trip.
+            # Save the new type (and any field edits) BEFORE re-extracting:
+            # re-extraction is a slow LLM call (minutes when the model
+            # struggles), and committing only at the end meant the type
+            # change didn't show up - or was lost on reload - until it finished.
+            db.session.commit()
             if doc.raw_text:
                 try:
                     from qwen_service import extract_fields

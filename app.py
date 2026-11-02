@@ -13,7 +13,8 @@ IVAULT_BASE     = "http://192.168.1.18"
 IVAULT_API_BASE = "https://ivaultapi2.ivaultplus.com/api"
 DB_USER = 'iprofiler_user'
 DB_PASS = quote_plus('P@ssw0rd')   # safely encodes @ and other special chars
-DB_HOST = 'host.docker.internal'
+# Docker default; start_iprofiler.bat sets DB_HOST to the X2 server (192.168.1.18) when running app.py directly.
+DB_HOST = os.environ.get('DB_HOST', 'host.docker.internal')
 DB_PORT = '3306'
 DB_NAME = 'dms_iprofiler'
 
