@@ -21,3 +21,6 @@ venv/
 
 # Local run log (start_iprofiler.bat)
 iprofiler.log
+
+# Portable Java runtime used by start_iprofiler.bat (not committed)
+jre/

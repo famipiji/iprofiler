@@ -98,6 +98,19 @@ def _label_for(name: str) -> str:
 _ZERO_TEMPLATE_TYPES = {"other", "form"}
 
 
+def check_java() -> bool:
+    """opendataloader-pdf (digital PDF text + highlight boxes) needs Java.
+    Without it, warn once here - qwen_service skips ODL entirely rather than
+    failing on every digital PDF."""
+    from qwen_service import java_available
+    if java_available():
+        return True
+    print("[Startup] Java not found - digital PDFs will use the pdfplumber fallback "
+          "(worse tables, no highlight boxes). Put a JRE 17+ on PATH or unpack one into .\\jre "
+          "(start_iprofiler.bat adds it).")
+    return False
+
+
 def seed_builtin_document_types():
     """Populate DocumentType table with all built-in types from FIELD_MAP."""
     from qwen_service import FIELD_MAP
@@ -355,6 +368,8 @@ with app.app_context():
         print("[Retention] Scheduler started")
     except Exception as e:
         print(f"[Retention] Scheduler not started: {e}")
+
+    check_java()
 
 
 # Serve frontend UI

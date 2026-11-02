@@ -8,6 +8,8 @@ import time
 import threading
 import tempfile
 import difflib
+import functools
+import shutil
 from collections import deque
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2937,75 +2939,46 @@ def extract_pdf_text_with_tables(pdf_path: str) -> str:
 
 def parse_odl_blocks(json_path: str) -> list:
     """
-    Parse Docling JSON output to extract text blocks with bounding boxes.
+    Parse opendataloader-pdf JSON output into text blocks with bounding boxes.
     Returns list of: {"page": int, "text": str, "bbox": [l, b, r, t]}
-    bbox is in PDF points, bottom-left origin ??? same coordinate space as PDF.js.
+    bbox is in PDF points, bottom-left origin - ODL's own "bounding box"
+    convention, and what normalize_bbox_to_relative() expects.
+
+    ODL's JSON is a tree under "kids": headings, paragraphs, captions, list
+    items, and tables -> "rows" -> "cells" -> "kids" (paragraphs). Every
+    element carrying text has "content", "page number" and "bounding box";
+    tables, rows and cells themselves have no "content", so a table yields one
+    block per cell paragraph (each with its own box), not one per table.
     """
     with open(json_path, "r", encoding="utf-8") as f:
         doc = json.load(f)
 
-    # Get page dimensions for TOPLEFT ??? BOTTOMLEFT conversion
-    page_heights = {}
-    for page_no_str, page_info in doc.get("pages", {}).items():
-        size = page_info.get("size", {})
-        page_heights[int(page_no_str)] = size.get("height", 792)
-
     blocks = []
 
-    def add_item(text, prov_list):
-        if not text or not text.strip():
+    def walk(node):
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
             return
-        text = _fix_odl_rtl_line_order(text)
-        for prov in prov_list:
-            page_no = prov.get("page_no", 1)
-            bbox_data = prov.get("bbox", {})
-            if not isinstance(bbox_data, dict):
-                continue
-            l = bbox_data.get("l", 0)
-            t_raw = bbox_data.get("t", 0)
-            r = bbox_data.get("r", 0)
-            b_raw = bbox_data.get("b", 0)
-            coord_origin = bbox_data.get("coord_origin", "BOTTOMLEFT")
-            if coord_origin == "TOPLEFT":
-                ph = page_heights.get(page_no, 792)
-                b = ph - t_raw
-                t = ph - b_raw
-            else:
-                b = b_raw
-                t = t_raw
-            blocks.append({"page": page_no, "text": text, "bbox": [l, b, r, t]})
+        if not isinstance(node, dict):
+            return
+        text = node.get("content")
+        bbox = node.get("bounding box")
+        if isinstance(text, str) and text.strip() and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+            try:
+                blocks.append({
+                    "page": int(node.get("page number") or 1),
+                    "text": _fix_odl_rtl_line_order(text.strip()),
+                    "bbox": [float(v) for v in bbox],
+                })
+            except (TypeError, ValueError):
+                pass
+        for value in node.values():
+            if isinstance(value, (dict, list)):
+                walk(value)
 
-    # Texts
-    for item in doc.get("texts", []):
-        add_item(item.get("text") or item.get("orig", ""), item.get("prov", []))
-
-    # Tables ??? add whole-table block + each cell
-    for table in doc.get("tables", []):
-        table_prov = table.get("prov", [])
-        for prov in table_prov:
-            page_no = prov.get("page_no", 1)
-            bbox_data = prov.get("bbox", {})
-            if isinstance(bbox_data, dict):
-                l = bbox_data.get("l", 0)
-                t_raw = bbox_data.get("t", 0)
-                r = bbox_data.get("r", 0)
-                b_raw = bbox_data.get("b", 0)
-                coord_origin = bbox_data.get("coord_origin", "BOTTOMLEFT")
-                if coord_origin == "TOPLEFT":
-                    ph = page_heights.get(page_no, 792)
-                    b = ph - t_raw
-                    t = ph - b_raw
-                else:
-                    b = b_raw
-                    t = t_raw
-                # Add individual cell texts under the table bbox
-                for row in table.get("data", {}).get("grid", []):
-                    for cell in row:
-                        cell_text = _fix_odl_rtl_line_order((cell.get("text") or "").strip())
-                        if cell_text:
-                            blocks.append({"page": page_no, "text": cell_text, "bbox": [l, b, r, t]})
-
-    print(f"[ODL] ??? Parsed {len(blocks)} text blocks with bboxes")
+    walk(doc.get("kids", []))
+    print(f"[ODL] Parsed {len(blocks)} text blocks with bboxes")
     return blocks
 
 
@@ -3211,13 +3184,25 @@ def _fix_odl_rtl_line_order(text: str) -> str:
     return '\n'.join(fix_line(line) for line in text.split('\n'))
 
 
+@functools.lru_cache(maxsize=1)
+def java_available() -> bool:
+    """opendataloader-pdf runs a Java process. Checked once per process
+    (app.py warns at startup); start_iprofiler.bat puts the portable .\\jre
+    on PATH, the Docker image installs a JRE."""
+    return shutil.which("java") is not None
+
+
 def extract_pdf_text_with_odl(pdf_path: str) -> tuple:
     """
     Extracts text from a PDF using opendataloader-pdf (primary extractor).
     Outputs clean markdown with proper table structure.
     Returns (markdown_text, text_blocks) where text_blocks is a list of
     {"page": int, "text": str, "bbox": [l, b, r, t]} dicts.
+    Returns ("", []) without trying when Java isn't on PATH - every caller
+    then uses the pdfplumber fallback.
     """
+    if not java_available():
+        return "", []
     import tempfile
     import opendataloader_pdf
 
@@ -3659,9 +3644,11 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                 print(f"[Pipeline] ??? ODL failed: {odl_err}")
                 raw_text = ""
 
-            # If ODL failed or returned nothing, fall back to pdfplumber+PyMuPDF
+            # If ODL failed, returned nothing or can't run (no Java - warned
+            # once at startup), fall back to pdfplumber+PyMuPDF
             if not raw_text.strip():
-                print("[Pipeline] ODL returned empty ??? falling back to pdfplumber+PyMuPDF...")
+                print("[Pipeline] ODL returned empty" + ("" if java_available() else " (no Java)")
+                      + " - falling back to pdfplumber+PyMuPDF...")
                 try:
                     raw_text = extract_pdf_text_with_tables(image_path)
                     print(f"[Pipeline] pdfplumber fallback: {len(raw_text)} chars")

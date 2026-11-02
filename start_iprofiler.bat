@@ -5,6 +5,8 @@ title iProfiler
 REM MySQL (dms_iprofiler) and LM Studio both live on the X2 server.
 REM app.py defaults to the Docker host name otherwise.
 if not defined DB_HOST set DB_HOST=192.168.1.18
+REM Portable Java (Eclipse Temurin 17) in .\jre - needed by opendataloader-pdf for digital PDFs.
+if exist "%~dp0jre\bin\java.exe" set "PATH=%~dp0jre\bin;%PATH%"
 if not defined OLLAMA_BASE_URL set OLLAMA_BASE_URL=http://192.168.1.18:1234/v1
 REM Must be a NON-thinking Instruct vision model (thinking models return empty answers).
 if not defined OLLAMA_MODEL set OLLAMA_MODEL=qwen3-vl-8b-instruct
