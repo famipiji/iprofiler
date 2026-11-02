@@ -322,31 +322,36 @@ def _with_ocr_hint(prompt: str, hint: str) -> str:
 OCR_TEXT_SOURCE = os.environ.get("OCR_TEXT_SOURCE", "vision").strip().lower()
 
 
-def _ocr_page_text(img, label: str):
-    """(text, mean_conf) of one page from the local OCR engine. Raises on OCR failure."""
-    from ocr_service import ocr_lines
+def _ocr_page_text(img, label: str, page: int = 1):
+    """(text, mean_conf, blocks) of one page from the local OCR engine, where
+    blocks are the page's lines in ocr_line_blocks_normalized() shape (kept as
+    the document's text_blocks, so the highlight overlay doesn't OCR again).
+    Raises on OCR failure."""
+    from ocr_service import ocr_lines, normalize_line_blocks
     lines = ocr_lines(img)
     text = "\n".join(ln["text"] for ln in lines).strip()
     confs = [ln["conf"] for ln in lines if ln.get("conf") is not None]
     mean_conf = sum(confs) / len(confs) if confs else 0.0
     print(f"[OCR-Text] {label}: {len(lines)} lines, {len(text)} chars, mean conf {mean_conf:.2f}")
-    return text, mean_conf
+    return text, mean_conf, normalize_line_blocks(lines, img.size, page)
 
 
-def _ocr_text_for_pages(images_with_labels) -> str:
-    """raw_text for a document from per-page OCR, or None when the Vision path
+def _ocr_text_for_pages(images_with_labels):
+    """(raw_text, text_blocks) for a document from per-page OCR (pages
+    numbered from 1 in the order given), or None when the Vision path
     should be used instead: OCR failed, the document has almost no text, or any
     page with text is below OCR_PRETEXT_MIN_MEAN_CONF (e.g. Jawi, bad scan).
     Near-empty pages (blank backs, separators) don't count as weak."""
     t0 = time.time()
-    pages = []
+    pages, blocks = [], []
     try:
-        for img, label in images_with_labels:
-            text, mean_conf = _ocr_page_text(img, label)
+        for page_num, (img, label) in enumerate(images_with_labels, start=1):
+            text, mean_conf, page_blocks = _ocr_page_text(img, label, page_num)
             if len(text) >= OCR_PRETEXT_MIN_CHARS and mean_conf < OCR_PRETEXT_MIN_MEAN_CONF:
                 print(f"[Pipeline] OCR text source: paddle -> vision ({label} weak, mean conf {mean_conf:.2f})")
                 return None
             pages.append(text)
+            blocks.extend(page_blocks)
     except Exception as e:
         print(f"[Pipeline] OCR text source: paddle -> vision (OCR failed: {e})")
         return None
@@ -354,8 +359,8 @@ def _ocr_text_for_pages(images_with_labels) -> str:
     if len(raw_text) < OCR_PRETEXT_MIN_CHARS:
         print(f"[Pipeline] OCR text source: paddle -> vision (only {len(raw_text)} chars)")
         return None
-    print(f"[Pipeline] OCR text source: paddle ({len(pages)} pages, {time.time()-t0:.1f}s)")
-    return raw_text
+    print(f"[Pipeline] OCR text source: paddle ({len(pages)} pages, {len(blocks)} blocks, {time.time()-t0:.1f}s)")
+    return raw_text, blocks
 
 
 def _ocr_text_for_pdf(pdf_path: str):
@@ -3633,6 +3638,9 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
     # extract_fields_vision() a second time, which is the whole point of the
     # merge (collapses 2 full Vision passes into 1 tiny + 1 full pass).
     _precomputed_fields = None
+    # OCR_TEXT_SOURCE=paddle: the OCR line blocks behind raw_text, returned as
+    # text_blocks so opening the document doesn't run OCR a second time.
+    _ocr_blocks = None
 
     if is_pdf:
         # ?????? Step 1: Quick scanned check before running ODL (saves JVM startup time) ???
@@ -3680,9 +3688,10 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
         if is_scanned and OCR_TEXT_SOURCE == "paddle":
             # Option B: local OCR text, then the normal-PDF text path below
             # (classify_document + extract_fields) - no Vision calls.
-            _ocr_text = _ocr_text_for_pdf(image_path)
-            if _ocr_text:
-                raw_text = _ocr_text
+            _ocr_result = _ocr_text_for_pdf(image_path)
+            if _ocr_result:
+                raw_text, _ocr_blocks = _ocr_result
+                odl_blocks = []   # thin/hybrid text layer - the OCR boxes cover the whole page
                 is_scanned = False
 
         if is_scanned:
@@ -3859,9 +3868,9 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                 confidence = normalize_confidence(cls_result.get("confidence"), source="text")
                 print(f"[Pipeline] Classified as: {document_type}")
 
-    elif OCR_TEXT_SOURCE == "paddle" and (_ocr_text := _ocr_text_for_image(image_path)):
+    elif OCR_TEXT_SOURCE == "paddle" and (_ocr_result := _ocr_text_for_image(image_path)):
         # Option B for images: local OCR text + the text path, no Vision calls.
-        raw_text = _ocr_text
+        raw_text, _ocr_blocks = _ocr_result
         if forced_document_type:
             document_type = forced_document_type
             confidence = normalize_confidence("high", source="forced")
@@ -4285,6 +4294,9 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                 "text": block["text"],
                 "bbox": normalize_bbox_to_relative(block["bbox"], pw, ph),
             })
+    elif _ocr_blocks:
+        # OCR_TEXT_SOURCE=paddle: reuse the OCR lines raw_text came from.
+        normalized_blocks = _ocr_blocks
     else:
         # Scanned PDF / plain image ??? bbox blocks for the highlight overlay
         # used to cost a second Vision call per page on TOP of the OCR call

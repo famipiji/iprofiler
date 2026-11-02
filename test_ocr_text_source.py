@@ -61,7 +61,9 @@ def test_default_is_vision(monkeypatch):
 
 def test_good_pages_joined(monkeypatch):
     _ocr_results(monkeypatch, GOOD, GOOD)
-    assert qs._ocr_text_for_pages([(_img(), "page 1"), (_img(), "page 2")]) == GOOD_TEXT + "\n\n" + GOOD_TEXT
+    text, blocks = qs._ocr_text_for_pages([(_img(), "page 1"), (_img(), "page 2")])
+    assert text == GOOD_TEXT + "\n\n" + GOOD_TEXT
+    assert [b["page"] for b in blocks] == [1, 1, 1, 2, 2, 2]
 
 
 def test_any_weak_page_falls_back_to_vision(monkeypatch):
@@ -72,7 +74,9 @@ def test_any_weak_page_falls_back_to_vision(monkeypatch):
 def test_blank_page_is_not_weak(monkeypatch):
     _ocr_results(monkeypatch, GOOD, [], _lines(("x", 0.2)))
     pages = [(_img(), f"page {i}") for i in (1, 2, 3)]
-    assert qs._ocr_text_for_pages(pages) == GOOD_TEXT + "\n\nx"
+    text, blocks = qs._ocr_text_for_pages(pages)
+    assert text == GOOD_TEXT + "\n\nx"
+    assert [b["page"] for b in blocks] == [1, 1, 1, 3]   # blank page 2 keeps the numbering
 
 
 def test_too_little_text_falls_back(monkeypatch):
@@ -91,7 +95,12 @@ def test_image_path(monkeypatch, tmp_path):
     _ocr_results(monkeypatch, GOOD)
     p = tmp_path / "x.png"
     _img().save(p)
-    assert qs._ocr_text_for_image(str(p)) == GOOD_TEXT
+    text, blocks = qs._ocr_text_for_image(str(p))
+    assert text == GOOD_TEXT
+    # Same shape and numbers as ocr_line_blocks_normalized() on that image.
+    assert blocks == ocr_service.normalize_line_blocks(GOOD, (200, 100), 1)
+    assert blocks[0] == {"page": 1, "text": "SIMEN UTARA SDN. BHD.",
+                         "bbox": {"x1": 0.0, "y1": 0.0, "x2": 0.5, "y2": 0.08}}
 
 
 def test_unreadable_image_falls_back(tmp_path):
@@ -134,7 +143,9 @@ def _fake_fitz(monkeypatch, n_pages=0, open_error=None):
 def test_pdf_pages_rendered_at_ocr_dpi(monkeypatch):
     _ocr_results(monkeypatch, GOOD, GOOD)
     zooms = _fake_fitz(monkeypatch, n_pages=2)
-    assert qs._ocr_text_for_pdf("scan.pdf") == GOOD_TEXT + "\n\n" + GOOD_TEXT
+    text, blocks = qs._ocr_text_for_pdf("scan.pdf")
+    assert text == GOOD_TEXT + "\n\n" + GOOD_TEXT
+    assert len(blocks) == 6 and blocks[3]["page"] == 2
     zoom = qs.OCR_PRETEXT_PDF_DPI / 72.0
     assert zooms == [(zoom, zoom)] * 2
 
@@ -186,7 +197,7 @@ def _run(path):
 
 def test_scanned_pdf_paddle_uses_text_path(pipeline, monkeypatch):
     monkeypatch.setattr(qs, "OCR_TEXT_SOURCE", "paddle")
-    monkeypatch.setattr(qs, "_ocr_text_for_pdf", lambda p: GOOD_TEXT)
+    monkeypatch.setattr(qs, "_ocr_text_for_pdf", lambda p: (GOOD_TEXT, []))
     assert _run("scan.pdf") == GOOD_TEXT
     assert pipeline["vision"] == []
     assert pipeline["classify"] == [GOOD_TEXT]
@@ -213,7 +224,7 @@ def test_image_paddle_uses_text_path(pipeline, monkeypatch, tmp_path):
     p = tmp_path / "id.png"
     _img().save(p)
     monkeypatch.setattr(qs, "OCR_TEXT_SOURCE", "paddle")
-    monkeypatch.setattr(qs, "_ocr_text_for_image", lambda path: GOOD_TEXT)
+    monkeypatch.setattr(qs, "_ocr_text_for_image", lambda path: (GOOD_TEXT, []))
     assert _run(str(p)) == GOOD_TEXT
     assert pipeline["vision"] == []
     assert pipeline["classify"] == [GOOD_TEXT]
@@ -223,7 +234,7 @@ def test_image_paddle_forced_type_skips_classify(pipeline, monkeypatch, tmp_path
     p = tmp_path / "id.png"
     _img().save(p)
     monkeypatch.setattr(qs, "OCR_TEXT_SOURCE", "paddle")
-    monkeypatch.setattr(qs, "_ocr_text_for_image", lambda path: GOOD_TEXT)
+    monkeypatch.setattr(qs, "_ocr_text_for_image", lambda path: (GOOD_TEXT, []))
     with pytest.raises(_StopAfterClassify):
         qs.process_document(str(p), forced_document_type="invoice")
     assert pipeline["vision"] == [] and pipeline["classify"] == []

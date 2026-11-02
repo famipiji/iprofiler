@@ -349,7 +349,13 @@ def ocr_line_blocks_normalized(img: Image.Image, page: int = 1) -> list:
     """[{"page", "text", "bbox": {x1, y1, x2, y2}}] with coords as 0..1
     fractions of the image size (top-left origin) - the same shape
     qwen_service.build_image_blocks() returns. Raises OCRError on failure."""
-    w, h = img.size
+    return normalize_line_blocks(ocr_lines(img), img.size, page)
+
+
+def normalize_line_blocks(lines: list, size, page: int = 1) -> list:
+    """ocr_lines() output for an image of `size` (w, h) -> the
+    ocr_line_blocks_normalized() shape, for callers that already ran OCR."""
+    w, h = size
     return [{
         "page": page,
         "text": ln["text"],
@@ -359,7 +365,7 @@ def ocr_line_blocks_normalized(img: Image.Image, page: int = 1) -> list:
             "x2": round(ln["box"][2] / w, 4),
             "y2": round(ln["box"][3] / h, 4),
         },
-    } for ln in ocr_lines(img)]
+    } for ln in lines]
 
 
 def extract_text(image_path: str) -> str:
