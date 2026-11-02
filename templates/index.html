@@ -4474,11 +4474,16 @@
             var _fCount = Object.keys(fresh.fields || {}).length;
             qaAppendBotMsg(
               'Document type updated to <strong>' + escHtml(_newLabel) + '</strong> — ' +
-              (_fCount
+              (data.reextract === 'failed'
+                ? 're-extraction failed, existing fields were kept.'
+                : _fCount
                 ? _fCount + ' field' + (_fCount !== 1 ? 's' : '') + ' re-extracted using this type\'s field list.'
                 : 'no fields could be extracted from this document under this type yet.')
             );
           }
+        }
+        if (data.reextract === 'failed') {
+          alert('Document type saved, but field re-extraction failed:\n' + data.reextract_error);
         }
         loadHistory();
       }

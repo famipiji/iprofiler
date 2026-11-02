@@ -1343,9 +1343,20 @@ def classify_document(raw_text: str, hint_type: str = None) -> dict:
         .replace("{{DOCUMENT_TEXT}}", raw_text[:500])
     )
 
-    result = safe_parse_json(call_qwen_text(prompt, max_tokens=50))
-    doc_type = result.get("document_type", hint_type or "unknown")
-    confidence = normalize_confidence(result.get("confidence"), source="text")
+    raw = call_qwen_text(prompt, max_tokens=50)
+    if not raw.strip():
+        raise QwenServiceUnavailableError("classify_document: model returned an empty answer")
+    result = safe_parse_json(raw)
+    if not isinstance(result, dict) or not result.get("document_type"):
+        # Not a real classification - report it at the fallback confidence
+        # rather than the 0.65 text default, so it doesn't look like one.
+        print(f"[Classify] Unparseable answer: {raw[:300]}")
+        result = result if isinstance(result, dict) else {}
+        doc_type = hint_type or "unknown"
+        confidence = normalize_confidence(None, source="fallback")
+    else:
+        doc_type = result["document_type"]
+        confidence = normalize_confidence(result.get("confidence"), source="text")
 
     # Normalize to snake_case
     doc_type = doc_type.lower().strip().replace(" ", "_").replace("-", "_")
@@ -1824,6 +1835,9 @@ def extract_fields_generic(raw_text: str, document_type: str = None, source_lang
 
     response = call_qwen_text(prompt, max_tokens=16000)  # Increased for complex/long documents
     print(f"[Generic Extraction] Response length: {len(response)} chars")
+    if not response.strip():
+        # An empty answer is a model problem, not "this document has no fields".
+        raise QwenServiceUnavailableError("extract_fields_generic: model returned an empty answer")
     print(f"[Generic Extraction] Raw response: {response[:300]}...")
 
     result = safe_parse_json(response)
@@ -2591,7 +2605,8 @@ def extract_fields_custom(raw_text: str, document_type: str, custom_fields: list
 
     print(f"[CustomExtraction] Extracting {len(custom_fields)} custom fields for '{document_type}'...")
     print(f"[CustomExtraction] Table sub_columns: { {fn: sub_columns[fn] for fn in field_names if field_types[fn] == 'table'} }")
-    result = safe_parse_json(call_qwen_text(prompt, max_tokens=2000))
+    raw_response = call_qwen_text(prompt, max_tokens=2000)
+    result = safe_parse_json(raw_response)
 
     if result and isinstance(result, dict):
         # Keep ONLY the fields this type defines (in schema order), null for any
@@ -2715,6 +2730,7 @@ def extract_fields_custom(raw_text: str, document_type: str, custom_fields: list
         return result
 
     print(f"[CustomExtraction] ??? Parsing failed, falling back to generic extraction")
+    print(f"[CustomExtraction] Raw response: {raw_response[:500]}")
     return {}
 
 

@@ -1428,6 +1428,7 @@ def erase_documents():
 def update_document(doc_id):
     doc  = Document.query.get_or_404(doc_id)
     data = request.get_json() or {}
+    reextract_error = None
     if "fields" in data:
         if not isinstance(data["fields"], dict):
             return jsonify({"success": False, "error": "'fields' must be an object"}), 400
@@ -1471,9 +1472,15 @@ def update_document(doc_id):
                     print(f"[PATCH] Re-extracted {len(new_fields)} fields for type '{new_type}'"
                           + ("" if type_changed else " (re-confirmed, same type)"))
                 except Exception as e:
+                    # Existing fields are left untouched; tell the UI instead
+                    # of reporting a normal (empty) re-extraction.
                     print(f"[PATCH] Field re-extraction failed: {e}")
+                    reextract_error = str(e)
     db.session.commit()
-    return jsonify({"success": True, "document": doc.to_dict()}), 200
+    resp = {"success": True, "document": doc.to_dict()}
+    if reextract_error:
+        resp.update({"reextract": "failed", "reextract_error": reextract_error})
+    return jsonify(resp), 200
 
 
 # ?????? GET /api/documents/type/<doc_type> ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
