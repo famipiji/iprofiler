@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <script src="/static/pdf.min.js"></script>
+  <script src="/static/date_highlight.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -2138,6 +2139,28 @@
     });
   }
 
+  // Where a field value occurs in a page's (or block's / raw) text, as
+  // [{index, length}] into `text`: every case-insensitive exact match, or -
+  // when there is none and the value is a date the model normalized (field
+  // "2026-09-23", page "9/23/2026", "23 Sept 2026", "23 Ogos 2026") - every
+  // match of the first printed variant found (static/date_highlight.js).
+  function _findValueMatches(text, value) {
+    var out = [];
+    if (!text || value == null) return out;
+    var needle = String(value).toLowerCase();
+    var lower = text.toLowerCase();
+    if (needle.trim()) {
+      var from = 0, idx;
+      while ((idx = lower.indexOf(needle, from)) !== -1) {
+        out.push({ index: idx, length: needle.length });
+        from = idx + needle.length;
+      }
+    }
+    if (out.length || !window.DateHighlight) return out;
+    var dm = DateHighlight.findDateMatches(text, String(value));
+    return dm ? dm.matches : out;
+  }
+
   function highlightInPdf(searchValue) {
     document.querySelectorAll('.pdf-highlight-overlay').forEach(function(o) { o.innerHTML = ''; });
     if (!searchValue || !pdfPageData.length) return;
@@ -2165,7 +2188,7 @@
     // ── ODL blocks path (preferred — semantically aligned with AI extraction) ──
     if (odlBlocks.length) {
       odlBlocks.forEach(function(block) {
-        if (!block.text.toLowerCase().includes(needle)) return;
+        if (!_findValueMatches(block.text, needle).length) return;
         var pageIdx = block.page - 1; // ODL pages are 1-based
         var pageData = pdfPageData[pageIdx];
         if (!pageData) return;
@@ -2198,7 +2221,7 @@
         for (var j = i; j < Math.min(i + 6, spans.length); j++) {
           win += spans[j].textContent;
           winSpans.push(spans[j]);
-          if (win.toLowerCase().includes(needle)) {
+          if (_findValueMatches(win, needle).length) {
             var r0 = winSpans[0].getBoundingClientRect();
             var rN = winSpans[winSpans.length - 1].getBoundingClientRect();
             var rx = r0.left - wrapperRect.left;
@@ -3566,7 +3589,21 @@
     if (!currentRawText || !value) { box.textContent = currentRawText || '(no text extracted)'; return false; }
     var escaped = escapeRegex(String(value));
     var regex = new RegExp('(' + escaped + ')', 'gi');
-    if (!regex.test(currentRawText)) { box.textContent = currentRawText; return false; }
+    if (!regex.test(currentRawText)) {
+      // A date the model normalized: mark the printed form instead.
+      var dm = window.DateHighlight ? DateHighlight.findDateMatches(currentRawText, String(value)) : null;
+      if (!dm) { box.textContent = currentRawText; return false; }
+      var html = '', pos = 0;
+      dm.matches.forEach(function(m) {
+        html += escHtml(currentRawText.slice(pos, m.index)) +
+                '<mark>' + escHtml(currentRawText.slice(m.index, m.index + m.length)) + '</mark>';
+        pos = m.index + m.length;
+      });
+      box.innerHTML = html + escHtml(currentRawText.slice(pos));
+      var dmark = box.querySelector('mark');
+      if (dmark) dmark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return true;
+    }
     var highlighted = currentRawText.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     highlighted = highlighted.replace(new RegExp('(' + escapeRegex(String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')) + ')', 'gi'), '<mark>$1</mark>');
     box.innerHTML = highlighted;
@@ -9528,7 +9565,6 @@
   function highlightInPdfDom(needle) {
     document.querySelectorAll('.pdf-highlight-overlay').forEach(function(o) { o.innerHTML = ''; });
     if (!needle || !pdfPageData.length) return 0;
-    needle = needle.toLowerCase();
     var totalMatches = 0;
     var firstMark = null;
 
@@ -9551,13 +9587,11 @@
         }
       });
 
-      var lowerText = fullText.toLowerCase();
-      var searchFrom = 0;
-      while (searchFrom < lowerText.length) {
-        var idx = lowerText.indexOf(needle, searchFrom);
-        if (idx === -1) break;
+      // Exact matches, or the page's first printed variant of a normalized date.
+      _findValueMatches(fullText, needle).forEach(function(match) {
+        var idx = match.index;
         var startSi = charToSpan[idx];
-        var endSi   = charToSpan[Math.min(idx + needle.length - 1, charToSpan.length - 1)];
+        var endSi   = charToSpan[Math.min(idx + match.length - 1, charToSpan.length - 1)];
         var matchSpans = spans.slice(startSi, endSi + 1).filter(function(s) { return s.textContent.trim(); });
         if (matchSpans.length) {
           var r0 = matchSpans[0].getBoundingClientRect();
@@ -9584,8 +9618,7 @@
             totalMatches++;
           }
         }
-        searchFrom = idx + needle.length;
-      }
+      });
     });
 
     if (firstMark) firstMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
