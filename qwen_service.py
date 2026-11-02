@@ -836,13 +836,60 @@ _STREAM_MAX_CHUNKS = 50000          # sane upper bound independent of max_tokens
 _STREAM_LARGE_DOC_TOKEN_THRESHOLD = 2500
 
 
+_served_model_logged = False
+
+
+def _log_served_model(model_id):
+    """Print the model id LM Studio actually answered with, once per process
+    (OLLAMA_MODEL may not match what's loaded - LM Studio can serve whatever
+    model is loaded regardless of the requested name)."""
+    global _served_model_logged
+    if _served_model_logged or not model_id:
+        return
+    _served_model_logged = True
+    print(f"[Qwen] Serving model: {model_id}")
+
+
+def _raise_if_no_answer(label, content, reasoning_chars, finish_reason, n_tokens):
+    """An empty `content` from a thinking model (output went to the reasoning
+    channel) or a generation cut off at max_tokens is a model problem - raise
+    instead of letting callers treat "" as "no fields"/"unknown type"."""
+    if content or not (reasoning_chars or finish_reason == "length"):
+        return
+    why = (f"used {n_tokens} tokens on reasoning" if reasoning_chars
+           else f"hit max_tokens after {n_tokens} tokens")
+    raise QwenServiceUnavailableError(
+        f"{label}: model returned no answer ({why}). Load a non-thinking "
+        f"Instruct model or disable thinking in LM Studio."
+    )
+
+
+def _message_text(response, label):
+    """Text of a non-streamed completion, with the same empty-answer check
+    as the streaming path."""
+    _log_served_model(getattr(response, "model", None))
+    choice = response.choices[0]
+    msg = choice.message
+    content = (msg.content or "").strip()
+    reasoning = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None) or ""
+    usage = getattr(response, "usage", None)
+    n_tokens = getattr(usage, "completion_tokens", None) or 0
+    _raise_if_no_answer(label, content, len(reasoning), choice.finish_reason, n_tokens)
+    return content
+
+
 def _consume_stream(stream, max_tokens, label):
     """Iterate a Qwen streaming response, aborting early instead of buffering
     forever / blocking up to the full client timeout, if either: no new chunk
     arrives for _STREAM_NO_PROGRESS_TIMEOUT seconds, or the stream exceeds
     _STREAM_MAX_CHUNKS chunks (a pathological/looping generation that ignores
-    max_tokens)."""
+    max_tokens).
+
+    Reasoning-channel output (`delta.reasoning_content` / `delta.reasoning`,
+    sent by thinking models) is counted but never mixed into the returned
+    text; if that leaves the answer empty, raises QwenServiceUnavailableError."""
     chunks, n, last_bucket = [], 0, -1
+    reasoning_chars, finish_reason = 0, None
     last_chunk_at = time.time()
     warned_large = False
     for chunk in stream:
@@ -856,7 +903,16 @@ def _consume_stream(stream, max_tokens, label):
                 f"{label}: no new output for over {_STREAM_NO_PROGRESS_TIMEOUT:.0f}s mid-stream, aborting"
             )
         last_chunk_at = now
-        delta = (chunk.choices[0].delta.content or "") if chunk.choices else ""
+        _log_served_model(getattr(chunk, "model", None))
+        delta = ""
+        if chunk.choices:
+            choice = chunk.choices[0]
+            d = choice.delta
+            delta = (getattr(d, "content", None) or "") if d is not None else ""
+            if d is not None:
+                reasoning_chars += len(getattr(d, "reasoning_content", None) or getattr(d, "reasoning", None) or "")
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
         chunks.append(delta)
         n += 1
         if n > _STREAM_MAX_CHUNKS:
@@ -875,7 +931,9 @@ def _consume_stream(stream, max_tokens, label):
             last_bucket = bucket
             _fire_token_frac(min(0.99, n / max_tokens))
     _fire_token_frac(1.0)
-    return "".join(chunks).strip(), n
+    result = "".join(chunks).strip()
+    _raise_if_no_answer(label, result, reasoning_chars, finish_reason, n)
+    return result, n
 
 
 def call_qwen_vision(b64: str, media_type: str, prompt: str, max_tokens: int = 100, extra_images: list = None, timeout: float = None) -> str:
@@ -903,7 +961,7 @@ def call_qwen_vision(b64: str, media_type: str, prompt: str, max_tokens: int = 1
                 timeout=timeout  # Pass through timeout (None uses client default)
             )
             print(f"[Timing] Vision call ({max_tokens} tok): {time.time()-t0:.1f}s")
-            return response.choices[0].message.content.strip()
+            return _message_text(response, "call_qwen_vision")
 
         stream = client.chat.completions.create(
             model=MODEL, messages=msgs, temperature=0.0, max_tokens=max_tokens, stream=True,
@@ -927,7 +985,7 @@ def call_qwen_text(prompt: str, max_tokens: int = 1000) -> str:
                 model=TEXT_MODEL, messages=msgs, temperature=0.1, max_tokens=max_tokens,
             )
             print(f"[Timing] Text call ({max_tokens} tok): {time.time()-t0:.1f}s")
-            return response.choices[0].message.content.strip()
+            return _message_text(response, "call_qwen_text")
 
         stream = client.chat.completions.create(
             model=TEXT_MODEL, messages=msgs, temperature=0.1, max_tokens=max_tokens, stream=True,
