@@ -1424,11 +1424,88 @@ def erase_documents():
 
 # ?????? PATCH /api/documents/<id> ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 
+# Background field re-extraction after a record-type change, keyed by doc id:
+# {"status": "running"|"done"|"empty"|"failed", "doc_type", "step_frac",
+#  "error", "n_fields", "started_at"}. In-memory like `jobs` - a server restart
+# mid-run just drops the entry, and the document's fields are left untouched.
+reextract_jobs = {}
+reextract_jobs_lock = threading.Lock()
+
+
+def _reextract_running(doc_id: int) -> bool:
+    with reextract_jobs_lock:
+        return reextract_jobs.get(doc_id, {}).get("status") == "running"
+
+
+def _run_reextract(doc_id: int, doc_type: str):
+    """Background thread: re-extract a document's fields for `doc_type`.
+    Fields are only replaced by a non-empty result for the type the document
+    still has - on failure, an empty answer or a later type change, the
+    existing fields stay."""
+    def _set(**kw):
+        with reextract_jobs_lock:
+            reextract_jobs[doc_id].update(kw)
+
+    _init_lm_progress(lambda label, frac: _set(step_frac=frac))
+    from app import app
+    from qwen_service import extract_fields, _set_lm_slot
+    with app.app_context():
+        try:
+            doc = Document.query.get(doc_id)
+            raw_text = doc.raw_text if doc else None
+            db.session.rollback()  # don't hold a DB transaction open during the LLM call
+            if not raw_text:
+                raise RuntimeError("Document has no text to re-extract from")
+            _set_lm_slot("Re-extracting fields...", 0.0, 1.0)
+            new_fields = extract_fields(raw_text, doc_type)
+            doc = Document.query.get(doc_id)
+            if not doc or doc.document_type != doc_type:
+                raise RuntimeError("Document type changed during re-extraction - result discarded")
+            if not new_fields:
+                print(f"[Reextract] doc {doc_id}: no fields for type '{doc_type}' - existing fields kept")
+                _set(status="empty", n_fields=0, step_frac=1.0)
+                return
+            doc.set_fields(new_fields)
+            db.session.commit()
+            print(f"[Reextract] doc {doc_id}: re-extracted {len(new_fields)} fields for type '{doc_type}'")
+            _set(status="done", n_fields=len(new_fields), step_frac=1.0)
+        except Exception as e:
+            db.session.rollback()
+            print(f"[Reextract] doc {doc_id}: failed: {e}")
+            _set(status="failed", error=str(e))
+        finally:
+            _init_lm_progress(None)
+
+
+def _start_reextract(doc_id: int, doc_type: str):
+    with reextract_jobs_lock:
+        reextract_jobs[doc_id] = {
+            "status": "running", "doc_type": doc_type, "step_frac": 0.0,
+            "error": None, "n_fields": None, "started_at": time.time(),
+        }
+    threading.Thread(target=_run_reextract, args=(doc_id, doc_type), daemon=True).start()
+
+
+@document_bp.route("/<int:doc_id>/reextract-status", methods=["GET"])
+def reextract_status(doc_id):
+    """Polled by the UI after a type change. "idle" when no re-extract has
+    run for this document since the server started."""
+    with reextract_jobs_lock:
+        job = dict(reextract_jobs.get(doc_id) or {"status": "idle"})
+    job.pop("started_at", None)
+    if job["status"] in ("done", "empty", "failed"):
+        doc = Document.query.get_or_404(doc_id)
+        job["document"] = doc.to_dict()
+    return jsonify(job), 200
+
+
 @document_bp.route("/<int:doc_id>", methods=["PATCH"])
 def update_document(doc_id):
     doc  = Document.query.get_or_404(doc_id)
     data = request.get_json() or {}
-    reextract_error = None
+    reextract = None
+    if "document_type" in data and _reextract_running(doc_id):
+        return jsonify({"success": False, "error": "Fields are still being re-extracted for this document - try again when it finishes"}), 409
     if "fields" in data:
         if not isinstance(data["fields"], dict):
             return jsonify({"success": False, "error": "'fields' must be an object"}), 400
@@ -1459,27 +1536,20 @@ def update_document(doc_id):
             # SAME type - e.g. after fixing that type's field list, this is
             # how the user retries extraction without a pointless rename
             # away-and-back round trip.
-            # Save the new type (and any field edits) BEFORE re-extracting:
-            # re-extraction is a slow LLM call (minutes when the model
-            # struggles), and committing only at the end meant the type
-            # change didn't show up - or was lost on reload - until it finished.
+            # Save the new type (and any field edits) first, then re-extract
+            # in the background: it's a slow LLM call (minutes when the model
+            # struggles), so the type change shows up immediately and the UI
+            # polls /reextract-status for the fields.
             db.session.commit()
             if doc.raw_text:
-                try:
-                    from qwen_service import extract_fields
-                    new_fields = extract_fields(doc.raw_text, new_type)
-                    doc.set_fields(new_fields)
-                    print(f"[PATCH] Re-extracted {len(new_fields)} fields for type '{new_type}'"
-                          + ("" if type_changed else " (re-confirmed, same type)"))
-                except Exception as e:
-                    # Existing fields are left untouched; tell the UI instead
-                    # of reporting a normal (empty) re-extraction.
-                    print(f"[PATCH] Field re-extraction failed: {e}")
-                    reextract_error = str(e)
+                print(f"[PATCH] Re-extracting fields for type '{new_type}' in the background"
+                      + ("" if type_changed else " (re-confirmed, same type)"))
+                _start_reextract(doc.id, new_type)
+                reextract = "started"
     db.session.commit()
     resp = {"success": True, "document": doc.to_dict()}
-    if reextract_error:
-        resp.update({"reextract": "failed", "reextract_error": reextract_error})
+    if reextract:
+        resp["reextract"] = reextract
     return jsonify(resp), 200
 
 

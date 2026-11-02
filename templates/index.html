@@ -4146,6 +4146,8 @@
     document.getElementById('modal-meta').innerHTML = doc.file_type.toUpperCase() + ' &middot; ' + new Date(doc.created_at).toLocaleString('en-SG', { timeZone: 'Asia/Singapore' });
     document.getElementById('modal-classification').innerHTML = '<span class="confidence-dot ' + confClass(doc.confidence) + '" id="modal-confidence-dot" title="' + doc.confidence + '"></span><span style="font-family:monospace;font-size:11px;color:var(--muted);margin-right:4px;" id="modal-confidence-text">' + (doc.confidence || '') + '</span><span class="doc-type-badge badge-' + doc.document_type + '" id="modal-doc-type-badge">' + doc.document_type.replace(/_/g, ' ').toUpperCase() + '</span><button class="badge-edit-btn" id="badge-edit-btn" title="Rename document type"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="btn-card-refresh" id="modal-refresh-btn" title="Refresh this document\'s data"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>';
     document.getElementById('badge-edit-btn').addEventListener('click', startEditDocType);
+    if (_reextractPolling[doc.id]) _showReextractBusy(doc.id, 'Re-extracting fields…');
+    else _resumeReextract(doc.id);
     document.getElementById('modal-refresh-btn').addEventListener('click', function() { refreshDocDetail(doc.id, true); });
     // Restore PDF toolbar controls (may have been hidden for a previous image doc)
     ['pdf-zoom-out','pdf-zoom-level','pdf-zoom-in','pdf-page-info','pdf-find-input','pdf-find-count'].forEach(function(id) {
@@ -4447,47 +4449,118 @@
         body:    JSON.stringify({ document_type: newType }),
       });
       var data = await res.json();
-      if (data.success) {
-        var b = document.getElementById('modal-doc-type-badge');
-        if (b) {
-          b.textContent = newType.replace(/_/g, ' ').toUpperCase();
-          b.className   = 'doc-type-badge badge-' + newType;
-        }
-        // The PATCH endpoint already re-extracted fields against the new
-        // type's own schema (see update_document in document_routes.py) -
-        // reflect that in the panel immediately instead of leaving the old
-        // (possibly empty, e.g. "other"'s zero-template) fields on screen
-        // until the user manually refreshes.
-        var fresh = data.document;
-        if (fresh) {
-          currentDocFields = fresh.fields || {};
-          currentDocFieldsManuallyEdited = false;  // freshly re-extracted, no longer "dirty"
-          currentDocType   = fresh.document_type || currentDocType;
-          renderFields(fresh.fields, 'modal-fields', currentDocId, fresh.document_type, fresh.field_sources, fresh.field_ambiguities);
-          var idx = allDocs ? allDocs.findIndex(function(a) { return a.id === currentDocId; }) : -1;
-          if (idx !== -1) allDocs[idx] = fresh;
-          // The greeting at the top of the Ask tab still names the old type -
-          // rewriting it in place would be misleading (it's a real chat
-          // message), so note the change as a fresh message instead.
-          if (qaDocId === currentDocId) {
-            var _newLabel = newType.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
-            var _fCount = Object.keys(fresh.fields || {}).length;
-            qaAppendBotMsg(
-              'Document type updated to <strong>' + escHtml(_newLabel) + '</strong> — ' +
-              (data.reextract === 'failed'
-                ? 're-extraction failed, existing fields were kept.'
-                : _fCount
-                ? _fCount + ' field' + (_fCount !== 1 ? 's' : '') + ' re-extracted using this type\'s field list.'
-                : 'no fields could be extracted from this document under this type yet.')
-            );
-          }
-        }
-        if (data.reextract === 'failed') {
-          alert('Document type saved, but field re-extraction failed:\n' + data.reextract_error);
-        }
-        loadHistory();
+      if (!data.success) {
+        alert(data.error || 'Failed to change document type');
+        return;
       }
+      var docId = currentDocId;
+      var b = document.getElementById('modal-doc-type-badge');
+      if (b) {
+        b.textContent = newType.replace(/_/g, ' ').toUpperCase();
+        b.className   = 'doc-type-badge badge-' + newType;
+      }
+      if (data.document) {
+        currentDocType = data.document.document_type || currentDocType;
+        var idx = allDocs ? allDocs.findIndex(function(a) { return a.id === docId; }) : -1;
+        if (idx !== -1) allDocs[idx] = data.document;
+      }
+      loadHistory();
+      // Fields are re-extracted in the background (see update_document in
+      // document_routes.py) - the type is already saved, poll for the fields.
+      if (data.reextract === 'started') _pollReextract(docId);
     } catch(e) { console.error('Type update failed:', e); }
+  }
+
+  // ── Background field re-extraction after a type change ──────────────────────
+  var _reextractPolling = {};  // docId -> true while a poll loop runs
+
+  function _showReextractBusy(docId, text) {
+    if (docId !== currentDocId) return;
+    var editBtn = document.getElementById('badge-edit-btn');
+    if (editBtn) {
+      editBtn.disabled = !!text;
+      editBtn.title    = text ? 'Wait for re-extraction to finish' : 'Rename document type';
+    }
+    var el = document.getElementById('modal-reextract-status');
+    if (!el && text) {
+      el = document.createElement('span');
+      el.id = 'modal-reextract-status';
+      el.style.cssText = 'font-size:11px;color:var(--muted);margin-left:6px;';
+      var anchor = document.getElementById('badge-edit-btn');
+      if (anchor) anchor.parentNode.insertBefore(el, anchor.nextSibling);
+    }
+    if (el) {
+      if (text) el.textContent = text;
+      else el.remove();
+    }
+  }
+
+  function _pollReextract(docId) {
+    if (_reextractPolling[docId]) return;
+    _reextractPolling[docId] = true;
+    _showReextractBusy(docId, 'Re-extracting fields…');
+    (async function loop() {
+      var job;
+      try {
+        var res = await fetch(API + '/' + docId + '/reextract-status');
+        job = await res.json();
+      } catch(e) {
+        job = null;  // transient network error - keep polling
+      }
+      if (job && job.status === 'running') {
+        var pct = Math.round((job.step_frac || 0) * 100);
+        _showReextractBusy(docId, 'Re-extracting fields…' + (pct ? ' ' + pct + '%' : ''));
+      }
+      if (!job || job.status === 'running') {
+        setTimeout(loop, 2000);
+        return;
+      }
+      delete _reextractPolling[docId];
+      _showReextractBusy(docId, null);
+      if (job.status !== 'idle') _finishReextract(docId, job);
+    })();
+  }
+
+  function _finishReextract(docId, job) {
+    var fresh = job.document;
+    if (fresh) {
+      var idx = allDocs ? allDocs.findIndex(function(a) { return a.id === docId; }) : -1;
+      if (idx !== -1) allDocs[idx] = fresh;
+    }
+    if (docId === currentDocId && fresh && job.status === 'done') {
+      currentDocFields = fresh.fields || {};
+      currentDocFieldsManuallyEdited = false;  // freshly re-extracted, no longer "dirty"
+      currentDocType   = fresh.document_type || currentDocType;
+      renderFields(fresh.fields, 'modal-fields', docId, fresh.document_type, fresh.field_sources, fresh.field_ambiguities);
+    }
+    // The greeting at the top of the Ask tab still names the old type -
+    // rewriting it in place would be misleading (it's a real chat message),
+    // so note the change as a fresh message instead.
+    if (qaDocId === docId && fresh) {
+      var _newLabel = (fresh.document_type || '').replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+      qaAppendBotMsg(
+        'Document type updated to <strong>' + escHtml(_newLabel) + '</strong> — ' +
+        (job.status === 'failed'
+          ? 're-extraction failed, existing fields were kept.'
+          : job.status === 'empty'
+          ? 'no fields could be extracted under this type, existing fields were kept.'
+          : job.n_fields + ' field' + (job.n_fields !== 1 ? 's' : '') + ' re-extracted using this type\'s field list.')
+      );
+    }
+    if (job.status === 'failed') {
+      alert('Document type saved, but field re-extraction failed:\n' + job.error);
+    }
+    loadHistory();
+  }
+
+  // Reopening a document while its re-extraction is still running picks the
+  // progress back up (and keeps the type editor disabled until it finishes).
+  async function _resumeReextract(docId) {
+    try {
+      var res = await fetch(API + '/' + docId + '/reextract-status');
+      var job = await res.json();
+      if (job.status === 'running') _pollReextract(docId);
+    } catch(e) { /* status is best-effort */ }
   }
 
   // ── Document Q&A ─────────────────────────────────────────────────────────────
