@@ -9,6 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <script src="/static/pdf.min.js"></script>
   <script src="/static/date_highlight.js"></script>
+  <script src="/static/image_highlight.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -1841,6 +1842,10 @@
   let isEditMode = false;
   let queueDoneCount = 0;
   let odlBlocks = []; // ODL bounding-box blocks for active document [{page,text,bbox}]
+  // Set while an image document (jpg/png) is open: {docId, img, overlay,
+  // lastValue (what's highlighted, for redraws)}.
+  // null for PDFs - their highlighting is untouched.
+  let _imageView = null;
   let queueTotal = 0;
 
   // ── PDF.js setup ────────────────────────────────────────────────────────────
@@ -2240,7 +2245,60 @@
   }
 
   // ── Highlight + zoom-in on field click ──────────────────────────────────────
+  // ── Image documents: highlight via OCR text blocks ──────────────────────────
+  // Marks every match of `value` in odlBlocks over the <img>, scaled to its
+  // displayed size (the server OCRs photos upright, EXIF applied, so the
+  // boxes match the upright <img> as-is); scrolls
+  // the first into view. Returns the number of marks. Remembers the value so
+  // a resize, the image loading or the blocks arriving can redraw it.
+  function highlightInImage(value) {
+    if (!_imageView) return 0;
+    _imageView.lastValue = value || null;
+    return _drawImageHighlight(true);
+  }
+
+  function _redrawImageHighlight() {
+    if (_imageView && _imageView.lastValue) _drawImageHighlight(false);
+  }
+
+  function _drawImageHighlight(scroll) {
+    var view = _imageView;
+    view.overlay.innerHTML = '';
+    var value = view.lastValue;
+    var w = view.img.clientWidth, h = view.img.clientHeight;
+    if (!value || !odlBlocks.length || !w || !h) return 0;
+    var rects = ImageHighlight.findBlockMatches(odlBlocks, value, _findValueMatches);
+    var first = null;
+    rects.forEach(function(r) {
+      var px = ImageHighlight.toPixels(r, w, h);
+      var mark = document.createElement('div');
+      mark.style.cssText = [
+        'position:absolute',
+        'left:'   + (px.left - 2) + 'px',
+        'top:'    + (px.top - 2) + 'px',
+        'width:'  + (px.width + 4) + 'px',
+        'height:' + (px.height + 4) + 'px',
+        'background:rgba(253,230,138,0.55)',
+        'border:2px solid #f59e0b',
+        'border-radius:3px',
+        'pointer-events:none',
+      ].join(';');
+      view.overlay.appendChild(mark);
+      if (!first) first = mark;
+    });
+    if (scroll && first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return rects.length;
+  }
+
+  var _imageResizeTimer = null;
+  window.addEventListener('resize', function() {
+    if (!_imageView) return;
+    clearTimeout(_imageResizeTimer);
+    _imageResizeTimer = setTimeout(_redrawImageHighlight, 100);
+  });
+
   async function highlightAndZoom(value) {
+    if (_imageView) { highlightInImage(value); return; }
     if (!pdfDoc) return;
     var TARGET_SCALE = PDF_BASE_SCALE * 1.5; // 150%
     try {
@@ -3618,6 +3676,7 @@
   function clearFieldHighlights() {
     document.querySelectorAll('.field-row.active-highlight').forEach(function(r) { r.classList.remove('active-highlight'); });
     document.querySelectorAll('.pdf-highlight-overlay').forEach(function(o) { o.innerHTML = ''; });
+    if (_imageView) _imageView.lastValue = null;   // nothing to redraw on resize
     var box = document.getElementById('raw-text-box');
     if (box) box.textContent = currentRawText || '(no text extracted)';
   }
@@ -4142,6 +4201,7 @@
   function openModal(doc) {
     hideFillPopup();
     odlBlocks = [];
+    _imageView = null;
     currentDocId = doc.id;
     currentDocFields = doc.fields || {};
     currentDocType = doc.document_type || null;
@@ -4170,6 +4230,8 @@
           if (_blocksRequestedFor !== currentDocId) return;  // user switched docs mid-fetch
           odlBlocks = d.blocks || [];
           console.log('[Blocks] Loaded ' + (odlBlocks.length || 0) + ' highlight blocks');
+          // A field clicked on an image before its blocks arrived gets drawn now.
+          if (_imageView && _imageView.docId === doc.id) _redrawImageHighlight();
         })
         .catch(function(err) {
           clearTimeout(timeoutId);
@@ -4229,18 +4291,32 @@
       container.innerHTML = '';
       var imgEl = document.createElement('img');
       imgEl.src = API + '/' + doc.id + '/original';
-      imgEl.style.cssText = 'max-width:100%;height:auto;display:block;border-radius:6px;box-shadow:0 2px 16px rgba(0,0,0,0.4);';
+      // image-orientation: from-image (the default) - the photo is shown
+      // upright per its EXIF tag, the same frame the server OCRs it in.
+      imgEl.style.cssText = 'max-width:100%;height:auto;display:block;border-radius:6px;box-shadow:0 2px 16px rgba(0,0,0,0.4);image-orientation:from-image;';
       imgEl.onerror = function() {
         container.innerHTML = '<div style="color:rgba(255,255,255,0.5);font-size:13px;padding:40px;text-align:center;">Could not load image preview.</div>';
       };
-      container.appendChild(imgEl);
-      // Hide PDF-specific controls (zoom, page, find) for plain images
+      // The image plus an overlay of the same size for field highlights.
+      var imgWrap = document.createElement('div');
+      imgWrap.style.cssText = 'position:relative;display:inline-block;max-width:100%;line-height:0;';
+      var imgOverlay = document.createElement('div');
+      imgOverlay.className = 'pdf-highlight-overlay img-highlight-overlay';
+      imgOverlay.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;';
+      imgWrap.appendChild(imgEl);
+      imgWrap.appendChild(imgOverlay);
+      container.appendChild(imgWrap);
+      var view = { docId: doc.id, img: imgEl, overlay: imgOverlay, lastValue: null };
+      _imageView = view;
+      imgEl.addEventListener('load', function() { if (_imageView === view) _redrawImageHighlight(); });
+      // Hide PDF-specific controls (zoom, page) for plain images; the find box
+      // stays - it searches the image's OCR text blocks.
       document.getElementById('pdf-zoom-out').style.display = 'none';
       document.getElementById('pdf-zoom-level').style.display = 'none';
       document.getElementById('pdf-zoom-in').style.display = 'none';
       document.getElementById('pdf-page-info').style.display = 'none';
-      document.getElementById('pdf-find-input').style.display = 'none';
-      document.getElementById('pdf-find-count').style.display = 'none';
+      document.getElementById('pdf-find-input').style.display = '';
+      document.getElementById('pdf-find-count').style.display = '';
     }
     document.getElementById('modal-raw-text').textContent = doc.raw_text || '(none)';
     document.getElementById('modal-json-text').textContent = JSON.stringify({ raw_text: doc.raw_text, document_type: doc.document_type, confidence: doc.confidence, fields: doc.fields }, null, 2);
@@ -9634,7 +9710,7 @@
     var q = this.value.trim();
     clearTimeout(_findDebounceTimer);
     _findDebounceTimer = setTimeout(function() {
-      var count = highlightInPdfDom(q);
+      var count = _imageView ? highlightInImage(q) : highlightInPdfDom(q);
       document.getElementById('pdf-find-count').textContent = q ? (count + (count === 1 ? ' match' : ' matches')) : '';
     }, 200);
   });

@@ -14,7 +14,7 @@ from collections import deque
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from PIL import Image
+from PIL import Image, ImageOps
 import openai
 from openai import OpenAI
 
@@ -271,9 +271,7 @@ def _ocr_hint_for_path(image_path: str) -> str:
     if not OCR_PRETEXT_HINT:
         return ""
     try:
-        with Image.open(image_path) as img:
-            img.load()
-            return _ocr_hint_for_image(img, "image")
+        return _ocr_hint_for_image(open_upright(image_path), "image")
     except Exception as e:
         print(f"[OCR-Hint] image: could not open, no hint ({e})")
         return ""
@@ -383,8 +381,7 @@ def _ocr_text_for_pdf(pdf_path: str):
 def _ocr_text_for_image(image_path: str):
     """_ocr_text_for_pages() for an uploaded image file."""
     try:
-        with Image.open(image_path) as img:
-            img = img.convert("RGB")
+        img = open_upright(image_path).convert("RGB")
     except Exception as e:
         print(f"[Pipeline] OCR text source: paddle -> vision (could not open image: {e})")
         return None
@@ -894,17 +891,27 @@ FIELD_ORDER = {
 
 # ?????? Image helpers ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 
-def encode_image(image_path: str, max_size: int = 1024, quality: int = 90) -> tuple:
+def open_upright(image_path: str) -> Image.Image:
+    """Open an uploaded image with its EXIF orientation applied - upright, the
+    way browsers (the document viewer) and phone galleries show it. A phone
+    photo is often stored sideways with an EXIF rotation tag: read as stored,
+    OCR finds no text in it at all, Vision sees it sideways, and any boxes
+    found wouldn't line up with the displayed image."""
     with Image.open(image_path) as img:
-        img = img.convert("RGB")
-        w, h = img.size
-        if max(w, h) > max_size:
-            scale = max_size / max(w, h)
-            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-        resized_w, resized_h = img.size  # ??? capture after resize
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=quality)
-        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        img.load()
+        return ImageOps.exif_transpose(img)
+
+
+def encode_image(image_path: str, max_size: int = 1024, quality: int = 90) -> tuple:
+    img = open_upright(image_path).convert("RGB")
+    w, h = img.size
+    if max(w, h) > max_size:
+        scale = max_size / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    resized_w, resized_h = img.size  # ??? capture after resize
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
     return b64, "image/jpeg", resized_w, resized_h  # ??? return dims
 
 
@@ -3087,10 +3094,9 @@ def compute_text_blocks_lazy(file_path: str) -> list:
         try:
             # Full resolution, not encode_image()'s 1024px copy - the boxes are
             # normalized to 0..1 either way, and OCR reads small text better.
-            # No EXIF transpose, matching the frame the old Vision path used.
-            with Image.open(file_path) as img:
-                img.load()
-                blocks = _ocr_page_blocks(img, page=1)
+            # Upright (EXIF applied), like encode_image() for the Vision
+            # fallback, so the boxes match the image the viewer displays.
+            blocks = _ocr_page_blocks(open_upright(file_path), page=1)
         except Exception as e:
             print(f"[TextBlocks] Opening image failed: {e}")
             blocks = []
