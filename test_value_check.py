@@ -130,3 +130,76 @@ def test_process_document_flags_values_not_in_text(monkeypatch, tmp_path):
     assert result["field_sources"].get("invoice_no") != "not in document"
     assert result["field_sources"].get("invoice_date") != "not in document"
     assert "line_items" not in result["field_sources"]
+
+
+# -- tolerant matching: numbers and multi-part values ----------------------------
+
+STATEMENT = """MAYBANK ISLAMIC BERHAD
+Statement Period: October 10
+November 9
+Account Holder: JAMES C. MORRISON
+No. 25, Jalan Damai 3,
+Taman Damai Perdana, 56000 Kuala Lumpur
+Opening balance $1,876.02
+Total deposits RM 1,000.00
+Invoice 2024 ref 01 qty 15
+Fees: 12.50 USD"""
+
+
+@pytest.mark.parametrize("value", [
+    "1876.02",                                   # vs $1,876.02
+    "$1876.02",
+    "RM1000",                                    # vs RM 1,000.00
+    "1000",
+    "1,000",
+    "RM 1 000.00",                               # spaces inside the amount
+    "MYR 1000.00",
+    "12.5",                                      # vs 12.50 USD
+    "12.50 USD",
+    "Morrison, James C.",                        # vs JAMES C. MORRISON
+    "James Morrison",
+    "No. 25, Jalan Damai 3, Taman Damai Perdana, 56000 Kuala Lumpur",   # two lines, comma-joined
+    "October 10 - November 9",                   # vs two lines
+])
+def test_tolerant_matches_found(value):
+    assert vc.value_in_text(value, STATEMENT)
+
+
+@pytest.mark.parametrize("value", [
+    "2024-01-15",            # fabricated date: 2024, 01 and 15 all occur, but not as a date
+    "15/01/2024",
+    "15 January 2024",
+    "1876.03",               # wrong amount
+    "RM1001",
+    "10000",                 # 1,000.00 is not 10000
+    "Morrison, John C.",     # one word missing
+    "No. 27, Jalan Damai 3", # wrong house number
+    "October 10 - December 9",
+    "X",                     # nothing but 1-char tokens and no exact match
+])
+def test_tolerant_matches_still_flag_wrong_values(value):
+    assert not vc.value_in_text(value, STATEMENT)
+
+
+def test_parse_number():
+    D = vc.Decimal
+    assert vc.parse_number("RM1000") == D("1000")
+    assert vc.parse_number("RM 1,000.00") == D("1000")
+    assert vc.parse_number("$1,876.02") == D("1876.02")
+    assert vc.parse_number("1,876.02 MYR") == D("1876.02")
+    assert vc.parse_number("-12.5") == D("-12.5")
+    for not_a_number in ["BK1141557", "012-3456789", "1,2,3", "12.5.6", "RM", "abc", "2024-01-15"]:
+        assert vc.parse_number(not_a_number) is None, not_a_number
+
+
+def test_numbers_in_text():
+    D = vc.Decimal
+    nums = vc.numbers_in_text("Total RM 1,000.00, tax 60.00. Ref 1,2,3 and 7.")
+    assert {D("1000"), D("60"), D("1"), D("2"), D("3"), D("7")} <= nums
+
+
+def test_flagging_uses_tolerant_checks():
+    fields = {"opening": "1876.02", "holder": "Morrison, James C.",
+              "period": "October 10 - November 9", "due_date": "2024-01-15", "amount": "RM1001"}
+    sources = {}
+    assert sorted(vc.flag_values_not_in_document(fields, STATEMENT, sources)) == ["amount", "due_date"]

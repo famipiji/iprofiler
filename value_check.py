@@ -5,12 +5,15 @@ a misread, or a value it reformatted beyond recognition) is flagged as
 "not in document" in field_sources; the value itself is never changed.
 
 A value counts as found when it occurs in raw_text ignoring case and all
-whitespace, or - for a date-like value - when any of its printed variants
-does. The date rules are a port of static/date_highlight.js (the UI's
-field-click highlighting) and must stay in step with it:
-test_value_check.py compares the two variant lists under node.
+whitespace; a date-like value when any of its printed variants does; a number
+when the same numeric value does (currency and thousands separators ignored);
+any other value when all its words occur, in any order (see value_in_text).
+The date rules are a port of static/date_highlight.js (the UI's field-click
+highlighting) and must stay in step with it: test_value_check.py compares the
+two variant lists under node.
 """
 import re
+from decimal import Decimal, InvalidOperation
 
 NOT_IN_DOCUMENT = "not in document"
 
@@ -168,15 +171,83 @@ def _squash(s: str) -> str:
     return re.sub(r"\s+", "", s).lower()
 
 
+# Currency markers stripped from either end of a value before reading it as
+# a number ("RM1000", "$1,876.02", "1,000.00 MYR").
+_CURRENCY_RE = r"(?:rm|myr|usd|us\$|sgd|s\$|\$|€|£|¥)"
+_PLAIN_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_GROUPED_NUMBER_RE = re.compile(r"-?\d{1,3}(?:,\d{3})+(?:\.\d+)?")
+# Candidate numbers in running text: digits with optional thousands commas
+# and a decimal part (trailing "," or "." of a sentence isn't included).
+_TEXT_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _to_decimal(s: str):
+    """Decimal for a plain ("1876.02") or comma-grouped ("1,876.02") number, else None."""
+    if _PLAIN_NUMBER_RE.fullmatch(s) or _GROUPED_NUMBER_RE.fullmatch(s):
+        try:
+            return Decimal(s.replace(",", ""))
+        except InvalidOperation:
+            return None
+    return None
+
+
+def parse_number(value):
+    """The numeric value of an amount-like field value, or None: currency
+    symbols/codes at either end, thousands separators and spaces are ignored,
+    so "RM 1,000.00", "RM1000" and "1000" are all Decimal 1000."""
+    s = str(value).strip().lower()
+    s = re.sub(rf"^{_CURRENCY_RE}\s*", "", s)
+    s = re.sub(rf"\s*{_CURRENCY_RE}$", "", s)
+    return _to_decimal(re.sub(r"\s+", "", s))
+
+
+def numbers_in_text(text: str) -> set:
+    """Every number in `text`, parsed like parse_number() (1,000.00 -> 1000).
+    A run with irregular commas ("1,2,3") contributes each piece instead."""
+    out = set()
+    for run in _TEXT_NUMBER_RE.findall(text or ""):
+        run = run.rstrip(",")
+        num = _to_decimal(run)
+        if num is not None:
+            out.add(num)
+        else:
+            out.update(n for n in (_to_decimal(p) for p in run.split(",") if p) if n is not None)
+    return out
+
+
+def _tokens(s: str) -> list:
+    """Lowercased word/number tokens, punctuation stripped, 1-char tokens dropped."""
+    return [t for t in re.findall(r"[^\W_]+", s.lower()) if len(t) > 1]
+
+
 def value_in_text(value, raw_text: str) -> bool:
-    """True when a scalar field value occurs in the document text: ignoring
-    case and whitespace, or as any printed variant of a date value."""
+    """True when a scalar field value occurs in the document text. Tried in
+    order:
+      1. exact, ignoring case and whitespace;
+      2. a date-like value: any printed variant of the date - and nothing
+         else, so a fabricated date whose numbers happen to occur elsewhere
+         on the page is still caught;
+      3. a number/amount: the same numeric value appears in the text
+         (1876.02 == $1,876.02, RM1000 == RM 1,000.00);
+      4. otherwise (names, addresses, periods): every token of 2+ characters
+         occurs as a word in the text, in any order ("Morrison, James C." vs
+         "JAMES C. MORRISON", an address split over two lines)."""
     v = str(value).strip()
     if not v:
         return True
-    if _squash(v) in _squash(raw_text or ""):
+    text = raw_text or ""
+    if _squash(v) in _squash(text):
         return True
-    return find_date_variant(raw_text or "", v) is not None
+    if parse_dates(v):
+        return find_date_variant(text, v) is not None
+    num = parse_number(v)
+    if num is not None:
+        return num in numbers_in_text(text)
+    tokens = _tokens(v)
+    if not tokens:
+        return False
+    text_tokens = set(_tokens(text))
+    return all(t in text_tokens for t in tokens)
 
 
 def flag_values_not_in_document(fields: dict, raw_text: str, field_sources: dict,
