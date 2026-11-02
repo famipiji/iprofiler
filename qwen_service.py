@@ -4262,6 +4262,17 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
         except Exception as _bc_err:
             print(f"[Pipeline] {document_type} typed-barcode-field extraction failed: {_bc_err}")
 
+    # Flag scalar values that don't occur in the document's own text (the
+    # value is kept; the UI shows a "check it" warning). Barcode decodes come
+    # from the image, not the text, and are skipped.
+    try:
+        from value_check import flag_values_not_in_document
+        _not_found = flag_values_not_in_document(fields, raw_text, field_sources)
+        if _not_found:
+            print(f"[Pipeline] Values not found in document text: {_not_found}")
+    except Exception as _vc_err:
+        print(f"[Pipeline] Value check failed: {_vc_err}")
+
     elapsed = time.time() - t_start
     print(f"[Pipeline] Done! Type: {document_type} | Confidence: {confidence} | Total: {elapsed:.1f}s")
 

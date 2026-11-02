@@ -173,3 +173,31 @@ def test_has_any_value(value, expected):
 
 def test_idle_status_for_untouched_document(client, doc_id):
     assert client.get(f"/api/documents/{doc_id}/reextract-status").get_json() == {"status": "idle"}
+
+
+# -- "not in document" flags (value_check) ---------------------------------------
+
+def _sources(did):
+    with app.app_context():
+        return Document.query.get(did).get_field_sources()
+
+
+def test_editing_a_flagged_field_clears_the_flag(client, doc_id):
+    import json as _json
+    with app.app_context():
+        doc = Document.query.get(doc_id)
+        doc.field_sources = _json.dumps({"invoice_no": "not in document", "total": "not in document"})
+        db.session.commit()
+    r = client.patch(f"/api/documents/{doc_id}", json={"fields": {"invoice_no": "123"}})
+    assert r.status_code == 200
+    assert _sources(doc_id) == {"total": "not in document"}
+    assert r.get_json()["document"]["field_sources"] == {"total": "not in document"}
+
+
+def test_reextract_flags_new_values_not_in_text(client, doc_id, extract):
+    # raw_text is "INVOICE No. 123\nTOTAL 10.00"
+    extract["result"] = {"receipt_no": "123", "total": "99.99"}
+    client.patch(f"/api/documents/{doc_id}", json={"document_type": "receipt"})
+    assert _wait_done(client, doc_id)["status"] == "done"
+    assert _sources(doc_id).get("total") == "not in document"
+    assert "receipt_no" not in _sources(doc_id)

@@ -162,6 +162,7 @@
     .src-badge.src-rule { background: rgba(16,185,129,0.25); color: #d6ffe9; border: 1px solid rgba(255,255,255,0.25); }
     .src-badge.src-ambig { background: rgba(245,158,11,0.25); color: #ffedc2; border: 1px solid rgba(255,255,255,0.3); cursor: pointer; }
     .src-badge.src-ambig:hover { background: rgba(245,158,11,0.4); }
+    .src-warn { display: inline-flex; vertical-align: middle; margin-left: 6px; color: #f59e0b; cursor: help; }
     .field-row:has(.src-none) { border-left-color: var(--error); }
     .field-input { font-family: 'Inter', sans-serif; font-size: 11px; color: var(--text); background: var(--bg); border: 1px solid var(--accent); border-radius: 4px; padding: 7px 10px; flex: 1; }
     .field-input:focus { outline: none; box-shadow: 0 0 8px rgba(59,130,246,0.3); }
@@ -3518,6 +3519,8 @@
     if (source === 'not detected') badge = ' <span class="src-badge src-none" title="No value found — add an alias for this field">not detected</span>';
     else if (source === 'date pattern') badge = ' <span class="src-badge src-rule" title="Filled by the date rule">date rule</span>';
     else if (source && source.indexOf('alias') === 0) badge = ' <span class="src-badge src-alias" title="Matched a Find-by label">via ' + escHtml(source) + '</span>';
+    else if (source === 'not in document' && !isNull) badge = ' <span class="src-warn" title="This value wasn’t found in the document — check it" aria-label="This value wasn’t found in the document — check it">'
+      + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>';
     // A taught alias resolved to a different value than the extractor did -
     // flagged instead of silently picked, only actionable where the Ask chat
     // exists to show the picker in (the modal, not the bare post-upload panel).

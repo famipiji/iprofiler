@@ -1494,6 +1494,13 @@ def _run_reextract(doc_id: int, doc_type: str, fields_before: dict):
                 return
             merged, user_keys = _merge_reextracted(new_fields, fields_before, doc.get_fields() or {})
             doc.set_fields(merged)
+            # Re-check the new values against the text (user-kept ones excepted).
+            from value_check import NOT_IN_DOCUMENT, flag_values_not_in_document
+            sources = {k: v for k, v in (doc.get_field_sources() or {}).items()
+                       if v != NOT_IN_DOCUMENT or k in user_keys}
+            flag_values_not_in_document({k: v for k, v in merged.items() if k not in user_keys},
+                                        raw_text, sources)
+            doc.field_sources = json.dumps(sources)
             db.session.commit()
             print(f"[Reextract] doc {doc_id}: re-extracted {len(new_fields)} fields for type '{doc_type}'"
                   + (f", kept user edits to {user_keys}" if user_keys else ""))
@@ -1541,6 +1548,14 @@ def update_document(doc_id):
         existing = doc.get_fields() or {}
         existing.update(data["fields"])
         doc.set_fields(existing)
+        # A value the user typed in themselves is no longer "not in document".
+        from value_check import NOT_IN_DOCUMENT
+        sources = doc.get_field_sources() or {}
+        cleared = [k for k in data["fields"] if sources.get(k) == NOT_IN_DOCUMENT]
+        if cleared:
+            for k in cleared:
+                sources.pop(k)
+            doc.field_sources = json.dumps(sources)
     if "document_type" in data:
         raw_input = (data["document_type"] or "").strip()
         # Resolve to the canonical DB display name (handles "tax_invoice" ??? "Tax Invoice")

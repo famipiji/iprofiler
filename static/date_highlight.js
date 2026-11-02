@@ -11,6 +11,10 @@
  *
  * Loaded by the page as window.DateHighlight; also a CommonJS module so
  * test_date_highlight.py can run it under node.
+ *
+ * value_check.py ports these rules to Python (flagging extracted values not
+ * found in the document); keep the two in step - test_value_check.py checks
+ * that both produce the same variants and patterns.
  */
 (function (root) {
   'use strict';
