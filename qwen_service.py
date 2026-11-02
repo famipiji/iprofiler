@@ -201,8 +201,11 @@ def _split_record_progress(label_prefix: str):
         _progress_ctx.suppress_page_mark = False
         _progress_ctx.label_prefix = ""
 
-MODEL      = os.environ.get("OLLAMA_MODEL", "qwen2.5-vl-32b-instruct")
-TEXT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-vl-32b-instruct")
+# Must be a NON-thinking Instruct vision model: thinking models spend the small
+# max_tokens budgets (5-50 tokens for classify/intent calls) on reasoning and
+# return no answer. Name = the model id shown by LM Studio's /v1/models.
+MODEL      = os.environ.get("OLLAMA_MODEL", "qwen3-vl-8b-instruct")
+TEXT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3-vl-8b-instruct")
 
 # Same knob/caveat as document_routes.MAX_CONCURRENT_UPLOADS: pages within one
 # scanned PDF are network/GPU-wait bound, not CPU bound, so overlapping their

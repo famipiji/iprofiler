@@ -66,7 +66,7 @@ On startup it seeds `DocumentType`/`DocumentField` rows from `qwen_service.FIELD
 ## Configuration / environment
 
 - `OLLAMA_BASE_URL` — OpenAI-compatible endpoint for the vision model (LM Studio default: `http://192.168.1.18:1234/v1`; Docker Compose points at `http://host.docker.internal:1234/v1`).
-- `OLLAMA_MODEL` — e.g. `qwen/qwen3-vl-8b` (Compose) vs `qwen3-vl-2b-instruct`/`qwen3-vl-7b-instruct` referenced elsewhere — model name must match what's loaded in LM Studio/Ollama.
+- `OLLAMA_MODEL` — `qwen3-vl-8b-instruct` (the id LM Studio on X2 reports at `/v1/models`; also the code default, Compose and `start_iprofiler.bat`). Must be a **non-thinking Instruct vision model**: thinking models (e.g. `qwen/qwen3.5-9b`, whose thinking can't be turned off in LM Studio) return empty answers on the small `max_tokens` calls.
 - `LLM_API_KEY` — dummy value is fine for a local LM Studio server (`lm-studio`).
 - `SQLALCHEMY_DATABASE_URI` — overrides the hardcoded MySQL DSN in `app.py`.
 - iVault credentials (`tenant`, `username`, `password`) are passed per-request in the sync endpoints, not stored as env vars.

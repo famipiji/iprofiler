@@ -1,15 +1,15 @@
 # iProfiler — Local-run fixes — 2026-11-02
 
-## STATUS: In Progress — Tasks 0, 1, 2, 5 implemented (2026-11-02); 3, 4, 6, 7 To Do
+## STATUS: In Progress — Tasks 0, 1 done; 2, 5 implemented (2026-11-02); 3, 4, 6, 7 To Do
 
 | Task | Status | Commit | Still pending |
 |---|---|---|---|
 | 0 | ✅ Done | `d0d1dc1` | — (CI green) |
-| 1 | Code done | `924e4ff`, `edb74d3` | Live verify: turn **thinking off** for `qwen/qwen3.5-9b` in LM Studio on X2 (probe 2026-11-02: `finish_reason=length`, empty content, 750 chars reasoning), then upload a digital PDF |
+| 1 | ✅ Done | `924e4ff`, `edb74d3`, model switch | Thinking can't be turned off for `qwen/qwen3.5-9b` in LM Studio ([bug #1990](https://github.com/lmstudio-ai/lmstudio-bug-tracker/issues/1990)) → switched to **`qwen3-vl-8b-instruct`** (context 32k). Live 2026-11-02: 2-page scanned bank statement → `bank_statement` 90% + 7 fields, no reasoning errors. Still: upload one digital PDF |
 | 2 | Code done | `073cf51` | Live verify with the model. Known gap: a *junk* answer for a custom type still returns `{}` and the PATCH saves it (wipes fields) → Task 3 step 1 |
 | 3 | To Do | — | — |
 | 4 | To Do | — | — |
-| 5 | Code done, flag off | `6219886` | A/B on ~10 scanned docs (`OCR_TEXT_SOURCE=vision` vs `paddle`), needs Task 1 live verify first. Smoke test: scanned invoice clean (conf 0.97); cheque photo passed the guard (0.89) but text garbled — conf guard doesn't catch messy layouts |
+| 5 | Code done; `paddle` on in `start_iprofiler.bat` (Compose still `vision`) | `6219886` | First live run (same bank statement): **47.0 s** (OCR 25.0 s, classify 12.0 s, fields 9.9 s) vs 306.4 s Vision + thinking model this morning. Still: check the transactions table is complete; A/B on ~10 scanned docs incl. messy photos (`vision` vs `paddle`). Smoke test: scanned invoice clean (conf 0.97); cheque photo passed the guard (0.89) but text garbled — conf guard doesn't catch messy layouts |
 | 6 | To Do | — | — |
 | 7 | To Do | — | — |
 

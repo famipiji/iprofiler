@@ -21,7 +21,7 @@ services:
       - paddle_models:/root/.paddlex
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:1234/v1
-      - OLLAMA_MODEL=qwen/qwen3-vl-8b
+      - OLLAMA_MODEL=qwen3-vl-8b-instruct
       - LLM_API_KEY=lm-studio
       - SQLALCHEMY_DATABASE_URI=mysql+pymysql://iprofiler_user:P%40ssw0rd@host.docker.internal:3306/dms_iprofiler
       - OCR_ENGINE=paddle
@@ -54,7 +54,7 @@ services:
       - paddle_models:/root/.paddlex
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:1234/v1
-      - OLLAMA_MODEL=qwen/qwen3-vl-8b
+      - OLLAMA_MODEL=qwen3-vl-8b-instruct
       - LLM_API_KEY=lm-studio
       - SQLALCHEMY_DATABASE_URI=mysql+pymysql://iprofiler_user:P%40ssw0rd@host.docker.internal:3306/dms_iprofiler
       - OCR_ENGINE=paddle

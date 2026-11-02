@@ -6,3 +6,6 @@
 *.sh text eol=lf
 Dockerfile text eol=lf
 entrypoint.sh text eol=lf
+
+# Windows batch files: CRLF in the working tree (cmd.exe expects it).
+*.bat text eol=crlf
