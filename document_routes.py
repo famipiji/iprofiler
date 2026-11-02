@@ -1437,11 +1437,38 @@ def _reextract_running(doc_id: int) -> bool:
         return reextract_jobs.get(doc_id, {}).get("status") == "running"
 
 
-def _run_reextract(doc_id: int, doc_type: str):
+def _has_any_value(value) -> bool:
+    """False for None, blank strings and containers holding nothing but
+    those (e.g. a table whose rows are all null cells)."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_has_any_value(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_any_value(v) for v in value)
+    return True
+
+
+def _merge_reextracted(new_fields: dict, before: dict, current: dict):
+    """(fields to save, keys kept from the user). Fields the user edited while
+    the re-extraction ran (value differs from the snapshot taken when it
+    started, or a field they added) keep the user's value; every other field
+    takes the new result."""
+    user_keys = [k for k in current if k not in before or current[k] != before[k]]
+    merged = dict(new_fields)
+    for k in user_keys:
+        merged[k] = current[k]
+    return merged, user_keys
+
+
+def _run_reextract(doc_id: int, doc_type: str, fields_before: dict):
     """Background thread: re-extract a document's fields for `doc_type`.
-    Fields are only replaced by a non-empty result for the type the document
-    still has - on failure, an empty answer or a later type change, the
-    existing fields stay."""
+    Fields are only replaced by a result with at least one real value, for the
+    type the document still has - on failure, an empty/all-null answer or a
+    later type change, the existing fields stay. Fields the user edits while
+    it runs are kept (see _merge_reextracted)."""
     def _set(**kw):
         with reextract_jobs_lock:
             reextract_jobs[doc_id].update(kw)
@@ -1461,14 +1488,16 @@ def _run_reextract(doc_id: int, doc_type: str):
             doc = Document.query.get(doc_id)
             if not doc or doc.document_type != doc_type:
                 raise RuntimeError("Document type changed during re-extraction - result discarded")
-            if not new_fields:
-                print(f"[Reextract] doc {doc_id}: no fields for type '{doc_type}' - existing fields kept")
+            if not new_fields or not _has_any_value(new_fields):
+                print(f"[Reextract] doc {doc_id}: no field values for type '{doc_type}' - existing fields kept")
                 _set(status="empty", n_fields=0, step_frac=1.0)
                 return
-            doc.set_fields(new_fields)
+            merged, user_keys = _merge_reextracted(new_fields, fields_before, doc.get_fields() or {})
+            doc.set_fields(merged)
             db.session.commit()
-            print(f"[Reextract] doc {doc_id}: re-extracted {len(new_fields)} fields for type '{doc_type}'")
-            _set(status="done", n_fields=len(new_fields), step_frac=1.0)
+            print(f"[Reextract] doc {doc_id}: re-extracted {len(new_fields)} fields for type '{doc_type}'"
+                  + (f", kept user edits to {user_keys}" if user_keys else ""))
+            _set(status="done", n_fields=len(new_fields), user_kept=user_keys, step_frac=1.0)
         except Exception as e:
             db.session.rollback()
             print(f"[Reextract] doc {doc_id}: failed: {e}")
@@ -1477,13 +1506,13 @@ def _run_reextract(doc_id: int, doc_type: str):
             _init_lm_progress(None)
 
 
-def _start_reextract(doc_id: int, doc_type: str):
+def _start_reextract(doc_id: int, doc_type: str, fields_before: dict):
     with reextract_jobs_lock:
         reextract_jobs[doc_id] = {
             "status": "running", "doc_type": doc_type, "step_frac": 0.0,
-            "error": None, "n_fields": None, "started_at": time.time(),
+            "error": None, "n_fields": None, "user_kept": [], "started_at": time.time(),
         }
-    threading.Thread(target=_run_reextract, args=(doc_id, doc_type), daemon=True).start()
+    threading.Thread(target=_run_reextract, args=(doc_id, doc_type, dict(fields_before or {})), daemon=True).start()
 
 
 @document_bp.route("/<int:doc_id>/reextract-status", methods=["GET"])
@@ -1544,7 +1573,7 @@ def update_document(doc_id):
             if doc.raw_text:
                 print(f"[PATCH] Re-extracting fields for type '{new_type}' in the background"
                       + ("" if type_changed else " (re-confirmed, same type)"))
-                _start_reextract(doc.id, new_type)
+                _start_reextract(doc.id, new_type, doc.get_fields())
                 reextract = "started"
     db.session.commit()
     resp = {"success": True, "document": doc.to_dict()}

@@ -129,13 +129,46 @@ def test_type_change_rejected_while_running(client, doc_id, extract):
     assert extract["calls"] == ["receipt"]
 
 
-def test_field_edit_allowed_while_running(client, doc_id, extract):
+def test_user_edits_during_run_are_kept(client, doc_id, extract):
+    with app.app_context():
+        doc = Document.query.get(doc_id)
+        doc.set_fields({"invoice_no": "123", "total": "10.00", "date": "2026-01-01"})
+        db.session.commit()
+    extract["result"] = {"invoice_no": "AI-1", "total": "AI-10", "date": "AI-DATE"}
     extract["gate"].clear()
     client.patch(f"/api/documents/{doc_id}", json={"document_type": "receipt"})
-    r = client.patch(f"/api/documents/{doc_id}", json={"fields": {"note": "x"}})
+    # While it runs: the user corrects one field and adds another.
+    r = client.patch(f"/api/documents/{doc_id}", json={"fields": {"total": "99.00", "note": "x"}})
     assert r.status_code == 200
     extract["gate"].set()
-    _wait_done(client, doc_id)
+    job = _wait_done(client, doc_id)
+    assert job["status"] == "done"
+    assert sorted(job["user_kept"]) == ["note", "total"]
+    assert _fields(doc_id) == {"invoice_no": "AI-1", "date": "AI-DATE", "total": "99.00", "note": "x"}
+
+
+def test_no_user_edits_means_full_replace(client, doc_id, extract):
+    client.patch(f"/api/documents/{doc_id}", json={"document_type": "receipt"})
+    job = _wait_done(client, doc_id)
+    assert job["user_kept"] == []
+    assert _fields(doc_id) == {"receipt_no": "R1"}
+
+
+def test_all_null_result_keeps_existing_fields(client, doc_id, extract):
+    extract["result"] = {"receipt_no": None, "total": "  ", "items": [{"desc": None, "qty": ""}], "meta": {}}
+    client.patch(f"/api/documents/{doc_id}", json={"document_type": "receipt"})
+    job = _wait_done(client, doc_id)
+    assert job["status"] == "empty"
+    assert _fields(doc_id) == {"invoice_no": "123"}
+
+
+@pytest.mark.parametrize("value, expected", [
+    (None, False), ("", False), ("   ", False), ([], False), ({}, False),
+    ({"a": None, "b": ""}, False), ([{"x": None}, {"y": " "}], False),
+    ("0", True), (0, True), (False, True), ({"a": None, "b": "x"}, True), ([{"x": None}, {"y": 1}], True),
+])
+def test_has_any_value(value, expected):
+    assert document_routes._has_any_value(value) is expected
 
 
 def test_idle_status_for_untouched_document(client, doc_id):

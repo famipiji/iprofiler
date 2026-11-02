@@ -803,10 +803,12 @@ def get_prompt_override(key: str) -> str:
         pass
 
     if key.startswith("structure_hint:"):
+        # Set before the try: the except below names it, and an import
+        # failure would otherwise turn into a NameError there.
+        doc_type_name = key.split(":", 1)[1]
         try:
             from prompt_studio_service import get_active_prompt_version
             from app import app
-            doc_type_name = key.split(":", 1)[1]
             print(f"[PromptStudio] Looking up active prompt for '{doc_type_name}'...")
             with app.app_context():
                 version = get_active_prompt_version(doc_type_name)
@@ -940,17 +942,32 @@ def _raise_if_no_answer(label, content, reasoning_chars, finish_reason, n_tokens
     )
 
 
+_THINK_BLOCK_RE = re.compile(r"<think>.*?(?:</think>|\Z)", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_think(text):
+    """(answer, reasoning_chars): remove inline <think>...</think> reasoning
+    that some backends leave in `content` instead of a separate reasoning
+    channel. An unclosed <think> (cut off at max_tokens) is all reasoning; a
+    lone </think> (the chat template opened the block) ends the reasoning."""
+    if "<think>" not in text.lower() and "</think>" in text.lower():
+        idx = text.lower().rfind("</think>")
+        return text[idx + len("</think>"):].strip(), idx
+    stripped = _THINK_BLOCK_RE.sub("", text)
+    return stripped.strip(), len(text) - len(stripped)
+
+
 def _message_text(response, label):
-    """Text of a non-streamed completion, with the same empty-answer check
-    as the streaming path."""
+    """Text of a non-streamed completion, with the same <think> stripping and
+    empty-answer check as the streaming path."""
     _log_served_model(getattr(response, "model", None))
     choice = response.choices[0]
     msg = choice.message
-    content = (msg.content or "").strip()
+    content, think_chars = _strip_think(msg.content or "")
     reasoning = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None) or ""
     usage = getattr(response, "usage", None)
     n_tokens = getattr(usage, "completion_tokens", None) or 0
-    _raise_if_no_answer(label, content, len(reasoning), choice.finish_reason, n_tokens)
+    _raise_if_no_answer(label, content, len(reasoning) + think_chars, choice.finish_reason, n_tokens)
     return content
 
 
@@ -1007,8 +1024,8 @@ def _consume_stream(stream, max_tokens, label):
             last_bucket = bucket
             _fire_token_frac(min(0.99, n / max_tokens))
     _fire_token_frac(1.0)
-    result = "".join(chunks).strip()
-    _raise_if_no_answer(label, result, reasoning_chars, finish_reason, n)
+    result, think_chars = _strip_think("".join(chunks))
+    _raise_if_no_answer(label, result, reasoning_chars + think_chars, finish_reason, n)
     return result, n
 
 
@@ -5208,7 +5225,7 @@ def translate_field_labels(labels: list, source_lang: str, target_lang: str) -> 
         response = client.chat.completions.create(
             model=TEXT_MODEL, messages=msgs, temperature=0.1, max_tokens=1500, stream=False
         )
-        raw = response.choices[0].message.content.strip()
+        raw = _message_text(response, "translate_field_labels")
         result = safe_parse_json(raw)
         if isinstance(result, dict):
             # Map back from the (possibly romanized) text the LLM saw to the
@@ -5371,7 +5388,7 @@ def answer_question(raw_text: str, question: str, history: list = None) -> dict:
             temperature=0.0,
             max_tokens=800,
         )
-        text = response.choices[0].message.content.strip()
+        text = _message_text(response, "answer_question")
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
             result = json.loads(match.group())
@@ -5461,7 +5478,7 @@ def detect_correction_intent(question: str, fields: dict, raw_text: str = "") ->
             temperature=0.0,
             max_tokens=400,
         )
-        text = response.choices[0].message.content.strip()
+        text = _message_text(response, "detect_correction_intent")
         match = re.search(r'\{.*\}', text, re.DOTALL)
         result = json.loads(match.group() if match else text)
         fn = result.get("field_name") or None
@@ -5517,7 +5534,7 @@ def generate_field_extraction_rule(field_name: str, field_label: str, corrected_
             temperature=0.2,
             max_tokens=200,
         )
-        rule = response.choices[0].message.content.strip()
+        rule = _message_text(response, "generate_field_extraction_rule")
         return rule
     except Exception as e:
         print(f"[ExtractionRule] Error: {e}")
@@ -5691,7 +5708,7 @@ def detect_chat_intent(question: str, fields: dict | None = None, raw_text: str 
             temperature=0.0,
             max_tokens=300,
         )
-        text = response.choices[0].message.content.strip()
+        text = _message_text(response, "detect_chat_intent")
         result = safe_parse_json(text)
         if not result:
             print(f"[ChatIntent] Could not parse JSON from model response: {text[:300]!r}")
@@ -5755,7 +5772,7 @@ def is_reply_to_guided_prompt(message: str, asked_for: str) -> bool:
             temperature=0.0,
             max_tokens=5,
         )
-        verdict = (response.choices[0].message.content or "").strip().upper()
+        verdict = _message_text(response, "is_reply_to_guided_prompt").upper()
         return "OTHER" not in verdict
     except Exception as e:
         print(f"[GuidedReply] Error: {e}")
@@ -5807,7 +5824,7 @@ def detect_extraction_request(question: str) -> dict:
             temperature=0.0,
             max_tokens=150,
         )
-        text = response.choices[0].message.content.strip()
+        text = _message_text(response, "detect_extraction_request")
         result = safe_parse_json(text)
         if not result:
             print(f"[ExtractionRequest] Could not parse JSON from model response: {text[:300]!r}")
@@ -5874,7 +5891,7 @@ def detect_add_field_request(question: str) -> dict:
             temperature=0.0,
             max_tokens=150,
         )
-        text = response.choices[0].message.content.strip()
+        text = _message_text(response, "detect_add_field_request")
         result = safe_parse_json(text)
         if not result:
             print(f"[AddField] Could not parse JSON from model response: {text[:300]!r}")
@@ -6189,7 +6206,7 @@ def extract_fields_on_demand(raw_text: str, field_hints: list, count_hint, doc_t
             temperature=0.1,
             max_tokens=2500,
         )
-        text = response.choices[0].message.content.strip()
+        text = _message_text(response, "extract_fields_on_demand")
         match = re.search(r'\{.*\}', text, re.DOTALL)
         result = json.loads(match.group() if match else text)
         return {

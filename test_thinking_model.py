@@ -7,6 +7,7 @@ Stream chunks and completions are faked - no LM Studio needed.
 
 Run: pytest test_thinking_model.py -v
 """
+import sys
 from types import SimpleNamespace as NS
 
 import pytest
@@ -101,3 +102,74 @@ def test_scanned_other_errors_still_retry_at_lower_dpi(monkeypatch):
     except Exception:
         pass
     assert len(calls) >= 2          # retried at a lower resolution
+
+
+# -- inline <think>...</think> in content ---------------------------------------
+
+@pytest.mark.parametrize("raw, answer", [
+    ('<think>hmm, an invoice</think>\n{"document_type": "invoice"}', '{"document_type": "invoice"}'),
+    ('<THINK>a</THINK>x<think>b</think>y', "xy"),
+    ('reasoning the template opened</think>\nANSWER', "ANSWER"),
+    ('no tags here', "no tags here"),
+])
+def test_strip_think(raw, answer):
+    assert qs._strip_think(raw)[0] == answer
+
+
+def test_stream_think_block_stripped():
+    stream = [_chunk(content="<think>let me "), _chunk(content="see</think>"),
+              _chunk(content='{"a": 1}'), _chunk(finish="stop")]
+    text, _ = qs._consume_stream(iter(stream), 100, "test")
+    assert text == '{"a": 1}'
+
+
+def test_stream_unclosed_think_raises():
+    # Cut off at max_tokens while still "thinking" inline -> no answer.
+    stream = [_chunk(content="<think>still thinking"), _chunk(finish="length")]
+    with pytest.raises(qs.QwenServiceUnavailableError, match="reasoning"):
+        qs._consume_stream(iter(stream), 100, "test")
+
+
+def test_non_stream_think_only_raises():
+    with pytest.raises(qs.QwenServiceUnavailableError, match="reasoning"):
+        qs._message_text(_completion("<think>only reasoning</think>", finish="stop"), "test")
+
+
+def test_non_stream_think_stripped():
+    assert qs._message_text(_completion("<think>x</think> receipt "), "test") == "receipt"
+
+
+# -- get_prompt_override: import failure in the structure_hint lookup -----------
+
+def test_prompt_override_structure_hint_import_failure_no_nameerror(monkeypatch, capsys):
+    monkeypatch.setattr(qs._prompt_override_ctx, "overrides", {}, raising=False)
+    monkeypatch.setitem(sys.modules, "prompt_studio_service", None)   # import -> ImportError
+    monkeypatch.setitem(sys.modules, "app", None)                     # no DB in tests
+    assert qs.get_prompt_override("structure_hint:invoice") is None
+    assert "DB lookup failed for 'invoice'" in capsys.readouterr().out
+
+
+# -- direct client calls go through _message_text -------------------------------
+
+@pytest.fixture
+def fake_client(monkeypatch):
+    state = {"content": ""}
+
+    def _create(**kw):
+        return _completion(state["content"])
+
+    monkeypatch.setattr(qs.client.chat.completions, "create", _create)
+    return state
+
+
+def test_extraction_rule_think_stripped(fake_client):
+    fake_client["content"] = "<think>what rule?</think>Take the value after 'Invoice No:'."
+    rule = qs.generate_field_extraction_rule("invoice_no", "Invoice No", "123", "invoice")
+    assert rule == "Take the value after 'Invoice No:'."
+
+
+def test_guided_reply_think_stripped(fake_client):
+    fake_client["content"] = "<think>is OTHER the answer? no</think>ANSWER"
+    assert qs.is_reply_to_guided_prompt("RM 50.00", "the total") is True
+    fake_client["content"] = "<think>it's an answer</think>OTHER"
+    assert qs.is_reply_to_guided_prompt("try to rescan", "the total") is False

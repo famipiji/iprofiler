@@ -4527,9 +4527,12 @@
       var idx = allDocs ? allDocs.findIndex(function(a) { return a.id === docId; }) : -1;
       if (idx !== -1) allDocs[idx] = fresh;
     }
+    var userKept = job.user_kept || [];
     if (docId === currentDocId && fresh && job.status === 'done') {
       currentDocFields = fresh.fields || {};
-      currentDocFieldsManuallyEdited = false;  // freshly re-extracted, no longer "dirty"
+      // Freshly re-extracted, no longer "dirty" - unless edits the user made
+      // while it ran were kept (the backend merged around them).
+      if (!userKept.length) currentDocFieldsManuallyEdited = false;
       currentDocType   = fresh.document_type || currentDocType;
       renderFields(fresh.fields, 'modal-fields', docId, fresh.document_type, fresh.field_sources, fresh.field_ambiguities);
     }
@@ -4544,7 +4547,8 @@
           ? 're-extraction failed, existing fields were kept.'
           : job.status === 'empty'
           ? 'no fields could be extracted under this type, existing fields were kept.'
-          : job.n_fields + ' field' + (job.n_fields !== 1 ? 's' : '') + ' re-extracted using this type\'s field list.')
+          : job.n_fields + ' field' + (job.n_fields !== 1 ? 's' : '') + ' re-extracted using this type\'s field list.' +
+            (userKept.length ? ' Your edits to ' + userKept.map(escHtml).join(', ') + ' were kept.' : ''))
       );
     }
     if (job.status === 'failed') {
