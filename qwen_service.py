@@ -308,6 +308,79 @@ def _with_ocr_hint(prompt: str, hint: str) -> str:
         + prompt
     )
 
+
+# -- OCR text as the text source (PaddleOCR migration, Task 7, option B) -----
+# OCR_TEXT_SOURCE=paddle builds raw_text for scanned PDFs and images from the
+# local OCR engine instead of Qwen Vision transcription, then runs the same
+# text path as a digital PDF (classify_document + extract_fields) - no Vision
+# calls. Falls back to the Vision path per document when the OCR looks weak
+# (same thresholds as the option A hint) or fails. "vision" (default) keeps
+# today's behaviour. Pending the A/B in the task file.
+OCR_TEXT_SOURCE = os.environ.get("OCR_TEXT_SOURCE", "vision").strip().lower()
+
+
+def _ocr_page_text(img, label: str):
+    """(text, mean_conf) of one page from the local OCR engine. Raises on OCR failure."""
+    from ocr_service import ocr_lines
+    lines = ocr_lines(img)
+    text = "\n".join(ln["text"] for ln in lines).strip()
+    confs = [ln["conf"] for ln in lines if ln.get("conf") is not None]
+    mean_conf = sum(confs) / len(confs) if confs else 0.0
+    print(f"[OCR-Text] {label}: {len(lines)} lines, {len(text)} chars, mean conf {mean_conf:.2f}")
+    return text, mean_conf
+
+
+def _ocr_text_for_pages(images_with_labels) -> str:
+    """raw_text for a document from per-page OCR, or None when the Vision path
+    should be used instead: OCR failed, the document has almost no text, or any
+    page with text is below OCR_PRETEXT_MIN_MEAN_CONF (e.g. Jawi, bad scan).
+    Near-empty pages (blank backs, separators) don't count as weak."""
+    t0 = time.time()
+    pages = []
+    try:
+        for img, label in images_with_labels:
+            text, mean_conf = _ocr_page_text(img, label)
+            if len(text) >= OCR_PRETEXT_MIN_CHARS and mean_conf < OCR_PRETEXT_MIN_MEAN_CONF:
+                print(f"[Pipeline] OCR text source: paddle -> vision ({label} weak, mean conf {mean_conf:.2f})")
+                return None
+            pages.append(text)
+    except Exception as e:
+        print(f"[Pipeline] OCR text source: paddle -> vision (OCR failed: {e})")
+        return None
+    raw_text = "\n\n".join(p for p in pages if p)
+    if len(raw_text) < OCR_PRETEXT_MIN_CHARS:
+        print(f"[Pipeline] OCR text source: paddle -> vision (only {len(raw_text)} chars)")
+        return None
+    print(f"[Pipeline] OCR text source: paddle ({len(pages)} pages, {time.time()-t0:.1f}s)")
+    return raw_text
+
+
+def _ocr_text_for_pdf(pdf_path: str):
+    """_ocr_text_for_pages() for a scanned PDF, rendered at OCR_PRETEXT_PDF_DPI
+    one page at a time (a render failure counts as an OCR failure)."""
+    import fitz
+    zoom = OCR_PRETEXT_PDF_DPI / 72.0
+
+    def _pages():
+        with fitz.open(pdf_path) as doc:
+            for page_num, page in enumerate(doc, start=1):
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+                yield Image.frombytes("RGB", (pix.width, pix.height), pix.samples), f"page {page_num}"
+
+    return _ocr_text_for_pages(_pages())
+
+
+def _ocr_text_for_image(image_path: str):
+    """_ocr_text_for_pages() for an uploaded image file."""
+    try:
+        with Image.open(image_path) as img:
+            img = img.convert("RGB")
+    except Exception as e:
+        print(f"[Pipeline] OCR text source: paddle -> vision (could not open image: {e})")
+        return None
+    return _ocr_text_for_pages([(img, "image")])
+
+
 # Split-PDF pipelines (process_split_pdf, process_barcode_split_pdf,
 # detect_separator_groups) run one sequential LLM call per page with no
 # other bound -- a very large PDF could take many minutes and hold
@@ -3584,6 +3657,14 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
         print(f"[Pipeline] PDF Type: {'SCANNED/HYBRID' if is_scanned else 'NORMAL'} "
               f"({len(raw_text)} chars, {len(value_lines)} value lines)")
 
+        if is_scanned and OCR_TEXT_SOURCE == "paddle":
+            # Option B: local OCR text, then the normal-PDF text path below
+            # (classify_document + extract_fields) - no Vision calls.
+            _ocr_text = _ocr_text_for_pdf(image_path)
+            if _ocr_text:
+                raw_text = _ocr_text
+                is_scanned = False
+
         if is_scanned:
             # ?????? SCANNED PDF PATH: Single Vision call ??? classify + OCR together ??????
             print("[Pipeline] Step 2: Scanned PDF detected ??? combined classify + OCR (single Vision call)...")
@@ -3757,6 +3838,20 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                 document_type = cls_result.get("document_type", "other")
                 confidence = normalize_confidence(cls_result.get("confidence"), source="text")
                 print(f"[Pipeline] Classified as: {document_type}")
+
+    elif OCR_TEXT_SOURCE == "paddle" and (_ocr_text := _ocr_text_for_image(image_path)):
+        # Option B for images: local OCR text + the text path, no Vision calls.
+        raw_text = _ocr_text
+        if forced_document_type:
+            document_type = forced_document_type
+            confidence = normalize_confidence("high", source="forced")
+            print(f"[Pipeline] Forced document type: {document_type}")
+        else:
+            _set_lm_slot("Classifying...", 0.0, 1.5)
+            cls_result = classify_document(raw_text)
+            document_type = cls_result.get("document_type", "other")
+            confidence = normalize_confidence(cls_result.get("confidence"), source="text")
+            print(f"[Pipeline] Classified as: {document_type}")
 
     else:
         # ?????? Image: classify + combined OCR/fields (single-page fast path) ??

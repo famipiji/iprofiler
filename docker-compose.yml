@@ -28,6 +28,8 @@ services:
       - PADDLE_OCR_LANG=en
       # 1 = add local OCR text to Qwen's prompts as a reference (off until A/B'd)
       - OCR_PRETEXT_HINT=0
+      # paddle = scanned PDFs/images use local OCR text + the text model, no Vision (off until A/B'd)
+      - OCR_TEXT_SOURCE=vision
       # TESSERACT_CMD - leave unset here; the container's tesseract-ocr package is
       # already on PATH. Only needed for local Windows dev (see ocr_service.py).
     restart: unless-stopped
@@ -59,6 +61,8 @@ services:
       - PADDLE_OCR_LANG=en
       # 1 = add local OCR text to Qwen's prompts as a reference (off until A/B'd)
       - OCR_PRETEXT_HINT=0
+      # paddle = scanned PDFs/images use local OCR text + the text model, no Vision (off until A/B'd)
+      - OCR_TEXT_SOURCE=vision
     restart: unless-stopped
 
 volumes:
