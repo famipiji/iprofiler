@@ -74,6 +74,18 @@ MySQL (`dms_iprofiler`, port 3306, user `iprofiler_user`) and LM Studio (port 12
 | `OCR_TEXT_SOURCE` | `paddle` | scanned PDFs/images: `paddle` = PaddleOCR reads the text, then the text model classifies + extracts (faster, falls back to Vision when OCR is weak); `vision` = Qwen Vision reads the page (Docker default) |
 | `PATH` | `.\jre\bin` first, if present | portable Java |
 
+Two more variables are read by `python app.py` and left **unset** by `start_iprofiler.bat` (a
+commented `REM set ...` example for each is in the file):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FLASK_DEBUG` | off | `1` = Werkzeug debugger + auto-reload when a `.py` file is saved |
+| `HOST` | `127.0.0.1` | `0.0.0.0` = reachable from other machines on the LAN at `http://<laptop-ip>:5000` |
+
+Never set both `FLASK_DEBUG=1` and `HOST=0.0.0.0` on a network you don't trust: the debugger lets
+anyone who can open the page run Python on the laptop. Docker is unaffected (it serves with waitress
+on `0.0.0.0`, see `entrypoint.sh`).
+
 The app is then at `http://localhost:5000`. All output is also written to `iprofiler.log`, which is
 **UTF-16** (PowerShell `Tee-Object`): read it with `iconv -f utf-16 -t utf-8 iprofiler.log` or an
 editor that detects the encoding.

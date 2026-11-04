@@ -1,6 +1,6 @@
 # iProfiler — Local-run fixes — 2026-11-02
 
-## STATUS: In Progress — Tasks 0–5 done (live checks 2026-11-04); 6, 7 To Do
+## STATUS: In Progress — Tasks 0–5, 7 done (live checks 2026-11-04); 6 To Do
 
 | Task | Status | Commit | Still pending |
 |---|---|---|---|
@@ -11,7 +11,7 @@
 | 4 | ✅ Done | Task 4 commit | Java = portable Temurin 17 in `jre\` (git-ignored, on PATH via the .bat); no Java → one `[Startup]` warning, ODL skipped. `parse_odl_blocks()` walks ODL's `kids` tree. Image date highlight (`00f2601`, `static/image_highlight.js`): `test_image_highlight.py` green; browser check listed for 2026-11-04 |
 | 5 | ✅ Done | `6219886` | `paddle` on in `start_iprofiler.bat` (Compose still `vision`). First live run 47.0 s vs 306.4 s. Live 2026-11-04 not-in-document flag: doc 755 `statement_period` no longer flagged after re-extract (value_check now ignores range connectors like "to"/"until"/"sampai" the model adds between two printed parts). Optional: A/B on ~10 scanned docs incl. messy photos |
 | 6 | To Do | — | — |
-| 7 | To Do | — | — |
+| 7 | ✅ Done | Task 7 commit | `app.py` reads `FLASK_DEBUG` (default off) and `HOST` (default `127.0.0.1`); `start_iprofiler.bat` leaves both unset with commented `REM set` examples. Verified 2026-11-04 on a spare port: default → bound `127.0.0.1`, LAN request fails, `/console` off; `HOST=0.0.0.0 FLASK_DEBUG=1` → bound `0.0.0.0`, LAN 200, debugger on. Docker unaffected (waitress in `entrypoint.sh`). Note: with the debugger off, saving a `.py` no longer auto-reloads - restart the .bat |
 
 Not from the Notion backlog. These came out of getting iProfiler running directly on the Windows
 dev laptop (no Docker) on 2026-10-30 / 2026-11-02 and reading its log. Run tasks **in order, one at
@@ -27,7 +27,7 @@ a time**; each ends with a **Verify** step that must pass before the next. Commi
   `python app.py`, and tees all output to `iprofiler.log`.
 - `iprofiler.log` is written by PowerShell `Tee-Object`, so it is **UTF-16**. Read it with
   `iconv -f utf-16 -t utf-8 iprofiler.log` (or open it in an editor that detects UTF-16).
-- The app runs in Flask debug mode: saving a `.py` file reloads the server automatically.
+- Since Task 7 the debugger/auto-reload is off by default (`set FLASK_DEBUG=1` in the .bat to get reload-on-save back).
 - **X2 server (192.168.1.18)** hosts both MySQL (`dms_iprofiler`, port 3306, user
   `iprofiler_user@%`) and LM Studio (port 1234).
 

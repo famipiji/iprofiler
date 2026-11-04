@@ -12,7 +12,7 @@ Run the app locally:
 ```bash
 python app.py
 ```
-Flask listens on port 5000. `FLASK_APP=app.py`, `FLASK_ENV=production` per the Dockerfile, but the code calls `app.run` directly for local dev.
+Flask listens on port 5000. `FLASK_APP=app.py`, `FLASK_ENV=production` per the Dockerfile, but the code calls `app.run` directly for local dev — on `127.0.0.1` with the debugger/auto-reload **off** unless `HOST` / `FLASK_DEBUG=1` are set (see Configuration). Docker doesn't use `app.run`: `entrypoint.sh` runs `waitress-serve --host=0.0.0.0`.
 
 Run locally on the Windows dev laptop (no Docker): double-click `start_iprofiler.bat`. It sets `DB_HOST=192.168.1.18` and `OLLAMA_BASE_URL=http://192.168.1.18:1234/v1` (the **X2 server** hosts both MySQL and LM Studio), `OLLAMA_MODEL=qwen3-vl-8b-instruct`, `OCR_TEXT_SOURCE=paddle`, puts a portable Java in `jre\` (git-ignored) on PATH if present, and tees output to `iprofiler.log` (UTF-16 - read with `iconv -f utf-16 -t utf-8 iprofiler.log`). Windows prerequisites: Python 3.12, poppler on PATH, Java 17+ (`jre\bin\java.exe` or a system JRE) for `opendataloader-pdf`, and LM Studio on X2 serving a non-thinking Instruct vision model. Without Java, `app.check_java()` prints one `[Startup] Java not found` warning and `qwen_service.extract_pdf_text_with_odl` returns empty so digital PDFs use the pdfplumber fallback. Full steps: "Running locally on Windows" in `README.md`.
 
@@ -73,6 +73,8 @@ On startup it seeds `DocumentType`/`DocumentField` rows from `qwen_service.FIELD
 - `SQLALCHEMY_DATABASE_URI` — overrides the hardcoded MySQL DSN in `app.py`.
 - `DB_HOST` — MySQL host for that DSN (default `host.docker.internal`; `start_iprofiler.bat` sets `192.168.1.18`).
 - `OCR_TEXT_SOURCE` — `vision` (default, Compose) = Qwen Vision transcribes scanned PDFs/images; `paddle` (`start_iprofiler.bat`) = PaddleOCR text + the text model for type and fields, falling back to Vision per document when OCR is weak; its OCR lines are saved as the document's `text_blocks`.
+- `FLASK_DEBUG` — `python app.py` only; default off. `1` = Werkzeug debugger + reload on `.py` save. `start_iprofiler.bat` leaves it unset (commented `REM set FLASK_DEBUG=1`).
+- `HOST` — `python app.py` bind address; default `127.0.0.1` (this machine only). `0.0.0.0` = LAN access. Unset in `start_iprofiler.bat` (commented `REM set HOST=0.0.0.0`). Don't combine with `FLASK_DEBUG=1` on an untrusted network — the debugger executes code.
 - iVault credentials (`tenant`, `username`, `password`) are passed per-request in the sync endpoints, not stored as env vars.
 
 Switching model size is a one-line change in `qwen_service.py` (the `MODEL` constant) per the README; nothing else needs to change.

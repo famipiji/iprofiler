@@ -12,6 +12,13 @@ REM Must be a NON-thinking Instruct vision model (thinking models return empty a
 if not defined OLLAMA_MODEL set OLLAMA_MODEL=qwen3-vl-8b-instruct
 REM Scanned PDFs/images: vision = AI reads the page (default), paddle = PaddleOCR reads it (faster).
 if not defined OCR_TEXT_SOURCE set OCR_TEXT_SOURCE=paddle
+REM Default: only this laptop can reach the app, Flask debugger/auto-reload off.
+REM To change, remove REM from a line below. Never use both on an untrusted
+REM network - the debugger lets anyone who can reach it run code.
+REM Debugger + auto-reload on .py save:
+REM set FLASK_DEBUG=1
+REM LAN access (other machines can open http://<this-laptop-ip>:5000):
+REM set HOST=0.0.0.0
 echo Starting iProfiler on http://localhost:5000 ...
 REM Show output here AND save it to iprofiler.log (for troubleshooting).
 set PYTHONUNBUFFERED=1

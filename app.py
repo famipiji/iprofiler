@@ -468,7 +468,21 @@ def get_ivault_record_types():
     return jsonify({"record_types": IVAULT_FALLBACK_TYPES, "source": "fallback"})
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    val = os.environ.get(name)
+    if val is None or not val.strip():
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
 if __name__ == '__main__':
+    # Local dev server only (Docker runs waitress via entrypoint.sh). Safe by
+    # default: localhost only, Werkzeug debugger/reloader off. The debugger
+    # runs arbitrary Python from the browser, so never combine FLASK_DEBUG=1
+    # with HOST=0.0.0.0 on a network you don't trust.
+    debug = _env_flag("FLASK_DEBUG")
+    host = (os.environ.get("HOST") or "127.0.0.1").strip()
+    print(f"[Startup] Listening on http://{host}:5000 (debug {'ON' if debug else 'off'})")
     # threaded=True allows concurrent requests (e.g. PDF viewer can load /original
     # while /blocks is still computing lazy highlights in a separate thread)
-    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
+    app.run(debug=debug, host=host, port=5000, threaded=True)
