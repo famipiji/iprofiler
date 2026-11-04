@@ -160,6 +160,9 @@ Fees: 12.50 USD"""
     "James Morrison",
     "No. 25, Jalan Damai 3, Taman Damai Perdana, 56000 Kuala Lumpur",   # two lines, comma-joined
     "October 10 - November 9",                   # vs two lines
+    "October 10 to November 9",                  # "to" added by the model, not printed
+    "Statement Period: October 10 to November 9",
+    "October 10 until November 9",
 ])
 def test_tolerant_matches_found(value):
     assert vc.value_in_text(value, STATEMENT)
@@ -175,6 +178,8 @@ def test_tolerant_matches_found(value):
     "Morrison, John C.",     # one word missing
     "No. 27, Jalan Damai 3", # wrong house number
     "October 10 - December 9",
+    "October 10 to December 9",   # a connector doesn't excuse a wrong end date
+    "until",                      # nothing but a connector
     "X",                     # nothing but 1-char tokens and no exact match
 ])
 def test_tolerant_matches_still_flag_wrong_values(value):

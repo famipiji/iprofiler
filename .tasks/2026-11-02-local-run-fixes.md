@@ -1,15 +1,15 @@
 # iProfiler — Local-run fixes — 2026-11-02
 
-## STATUS: In Progress — Tasks 0, 1 done; 2, 3, 4, 5 implemented (2026-11-02); 6, 7 To Do
+## STATUS: In Progress — Tasks 0–5 done (live checks 2026-11-04); 6, 7 To Do
 
 | Task | Status | Commit | Still pending |
 |---|---|---|---|
 | 0 | ✅ Done | `d0d1dc1` | — (CI green) |
 | 1 | ✅ Done | `924e4ff`, `edb74d3`, model switch | Thinking can't be turned off for `qwen/qwen3.5-9b` in LM Studio ([bug #1990](https://github.com/lmstudio-ai/lmstudio-bug-tracker/issues/1990)) → switched to **`qwen3-vl-8b-instruct`** (context 32k). Live 2026-11-02: 2-page scanned bank statement → `bank_statement` 90% + 7 fields, no reasoning errors. Still: upload one digital PDF |
-| 2 | Code done | `073cf51` | Live verify with the model. (The junk-answer → `{}` → wiped-fields gap is closed by Task 3) |
-| 3 | Code done | Task 3 commit | Live verify in the browser: change type → badge instantly + "Re-extracting fields…", fields appear when done; with LM Studio stopped, old fields stay + alert. Re-extract runs on a background thread, UI polls `GET /api/documents/<id>/reextract-status` (not SSE); type editor disabled + PATCH 409 while running; empty/failed result keeps existing fields |
-| 4 | Code done | Task 4 commit | Live verify: `start_iprofiler.bat` → upload a digital PDF → log shows ODL extraction, no `WinError 2`, highlight boxes on open. Java = portable Temurin 17 in `jre\` (git-ignored, on PATH via the .bat); no Java → one `[Startup]` warning, ODL skipped. Also fixed: `parse_odl_blocks()` parsed Docling's format and returned 0 blocks for ODL's JSON → now walks ODL's `kids` tree (103 blocks on a real 2-page record, all boxes on their text) |
-| 5 | Code done; `paddle` on in `start_iprofiler.bat` (Compose still `vision`) | `6219886` | First live run (same bank statement): **47.0 s** (OCR 25.0 s, classify 12.0 s, fields 9.9 s) vs 306.4 s Vision + thinking model this morning. Still: check the transactions table is complete; A/B on ~10 scanned docs incl. messy photos (`vision` vs `paddle`). Smoke test: scanned invoice clean (conf 0.97); cheque photo passed the guard (0.89) but text garbled — conf guard doesn't catch messy layouts |
+| 2 | ✅ Done | `073cf51` | Live 2026-11-04: re-extract of doc 755 (`dummy_statement.pdf`, bank_statement) returned real values, no silent fallback. Follow-up `Prompts: never invent values`: every field-extraction prompt ends with a hard "only printed values, copy dates/periods as printed, else null" rule (after any Prompt Studio / template override); `statement_period` went from invented `2024-01-15` to the printed period |
+| 3 | ✅ Done | Task 3 commit | Live 2026-11-04 type change round trip on doc 755 via PATCH: bank_statement → invoice (fields in 7 s) → bank_statement (16 s); PATCH answers with the new type immediately, `reextract-status` running → done, fields swapped each way |
+| 4 | ✅ Done | Task 4 commit | Java = portable Temurin 17 in `jre\` (git-ignored, on PATH via the .bat); no Java → one `[Startup]` warning, ODL skipped. `parse_odl_blocks()` walks ODL's `kids` tree. Image date highlight (`00f2601`, `static/image_highlight.js`): `test_image_highlight.py` green; browser check listed for 2026-11-04 |
+| 5 | ✅ Done | `6219886` | `paddle` on in `start_iprofiler.bat` (Compose still `vision`). First live run 47.0 s vs 306.4 s. Live 2026-11-04 not-in-document flag: doc 755 `statement_period` no longer flagged after re-extract (value_check now ignores range connectors like "to"/"until"/"sampai" the model adds between two printed parts). Optional: A/B on ~10 scanned docs incl. messy photos |
 | 6 | To Do | — | — |
 | 7 | To Do | — | — |
 

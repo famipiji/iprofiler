@@ -784,6 +784,24 @@ Rules:
 Reply with ONLY: {{JSON_TEMPLATE}}"""
 
 
+# Hard rule appended to EVERY field-extraction prompt, after all template and
+# Prompt Studio override text, so neither a user-edited template nor an active
+# PromptVersion can drop it. The small local model otherwise "completes" values
+# that aren't printed (e.g. a printed period "October 10 to November 9" came
+# back as statement_period "2024-01-15").
+NO_INVENTION_RULE = (
+    "Only return values that are printed in the document. Copy dates, periods and amounts exactly "
+    "as printed — never invent, assume or complete a missing year, day or month, and never convert "
+    "a written period (e.g. 'October 10 to November 9') into a single date. If a field is not in "
+    "the document, return null."
+)
+
+
+def _with_no_invention_rule(prompt: str) -> str:
+    """Append NO_INVENTION_RULE as the final instruction of an extraction prompt."""
+    return f"{prompt.rstrip()}\n\nHARD RULE (overrides any instruction above): {NO_INVENTION_RULE}"
+
+
 EXTRACT_PROMPTS = {
     "extract_structured_prompt":        ("Generic Extraction ??? Known Field List", DEFAULT_EXTRACT_STRUCTURED_PROMPT),
     "extract_generic_directive_prompt": ("Generic Extraction ??? With Structure Rules", DEFAULT_EXTRACT_GENERIC_DIRECTIVE_PROMPT),
@@ -1534,6 +1552,7 @@ IMPORTANT for line_items:
         .replace("{{TEXT_BLOCK}}", text_block)
         .replace("{{JSON_TEMPLATE}}", "{" + json_template + "}")
     )
+    prompt = _with_no_invention_rule(prompt)
 
     result = safe_parse_json(call_qwen_text(prompt, max_tokens=1500))
 
@@ -1939,6 +1958,7 @@ def extract_fields_generic(raw_text: str, document_type: str = None, source_lang
             .replace("{{KEY_LANG_RULE}}", key_lang_rule_generic)
             .replace("{{EXAMPLE_BLOCK}}", example_block)
         )
+    prompt = _with_no_invention_rule(prompt)
 
     response = call_qwen_text(prompt, max_tokens=16000)  # Increased for complex/long documents
     print(f"[Generic Extraction] Response length: {len(response)} chars")
@@ -2241,6 +2261,7 @@ def extract_fields_vision(b64: str, media_type: str, document_type: str, raw_tex
         .replace("{{SUMMARY_KEY_RULE}}", summary_key_rule)
         .replace("{{EXTRACTION_SCOPE}}", extraction_scope)
     )
+    prompt = _with_no_invention_rule(prompt)
 
     try:
         response = call_qwen_vision(b64, media_type, prompt, max_tokens=16000)
@@ -2382,6 +2403,7 @@ def classify_and_extract_combined_vision(b64: str, media_type: str, forced_docum
         .replace("{{FIELD_SCOPE_RULE}}", field_scope_rule)
         .replace("{{EXTRACTION_SCOPE}}", extraction_scope)
     )
+    prompt = _with_no_invention_rule(prompt)
 
     result = {"document_type": document_type, "raw_text": "", "fields": {}, "fields_reliable": False}
     # No try/except around this call either -- same reasoning as above: an
@@ -2641,7 +2663,9 @@ def extract_fields_custom(raw_text: str, document_type: str, custom_fields: list
     for fn in field_names:
         ft = field_types[fn]
         if ft == "date":
-            type_hints.append(f'"{fn}": return a date string (e.g. "2024-01-15")')
+            # No example date here: the model copied the example ("2024-01-15")
+            # into a statement_period that was printed as a written period.
+            type_hints.append(f'"{fn}": the date or period exactly as printed in the document')
         elif ft == "number":
             type_hints.append(f'"{fn}": return a numeric value (no currency symbols)')
         elif ft == "currency":
@@ -2709,6 +2733,7 @@ def extract_fields_custom(raw_text: str, document_type: str, custom_fields: list
         .replace("{{FIELD_NAMES_LIST}}", field_names_list)
         .replace("{{JSON_TEMPLATE}}", "{" + json_template + "}")
     )
+    prompt = _with_no_invention_rule(prompt)
 
     print(f"[CustomExtraction] Extracting {len(custom_fields)} custom fields for '{document_type}'...")
     print(f"[CustomExtraction] Table sub_columns: { {fn: sub_columns[fn] for fn in field_names if field_types[fn] == 'table'} }")
@@ -6210,6 +6235,7 @@ def extract_fields_on_demand(raw_text: str, field_hints: list, count_hint, doc_t
         "- Omit fields with no value (do not include null entries)\n"
         "- Return ONLY the JSON object, no explanation or markdown\n"
     )
+    system_msg = _with_no_invention_rule(system_msg)
     user_msg = f"{field_instruction}\n\nDocument text:\n{text_block}"
 
     try:

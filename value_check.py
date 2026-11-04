@@ -220,6 +220,13 @@ def _tokens(s: str) -> list:
     return [t for t in re.findall(r"[^\W_]+", s.lower()) if len(t) > 1]
 
 
+# Words the model uses to join the two ends of a printed period ("Beginning
+# balance on October 10 to Ending balance on November 9") that the document
+# itself needn't contain. Ignored in the token check only; the dates/words on
+# either side must still be printed.
+_RANGE_CONNECTORS = {"to", "until", "till", "through", "thru", "and", "sampai", "hingga", "dan"}
+
+
 def value_in_text(value, raw_text: str) -> bool:
     """True when a scalar field value occurs in the document text. Tried in
     order:
@@ -231,7 +238,9 @@ def value_in_text(value, raw_text: str) -> bool:
          (1876.02 == $1,876.02, RM1000 == RM 1,000.00);
       4. otherwise (names, addresses, periods): every token of 2+ characters
          occurs as a word in the text, in any order ("Morrison, James C." vs
-         "JAMES C. MORRISON", an address split over two lines)."""
+         "JAMES C. MORRISON", an address split over two lines); range
+         connectors the model adds between two printed parts ("to",
+         "until", "sampai", ...) don't need to occur."""
     v = str(value).strip()
     if not v:
         return True
@@ -247,6 +256,8 @@ def value_in_text(value, raw_text: str) -> bool:
     if not tokens:
         return False
     text_tokens = set(_tokens(text))
+    if not all(t in _RANGE_CONNECTORS for t in tokens):
+        tokens = [t for t in tokens if t not in _RANGE_CONNECTORS]
     return all(t in text_tokens for t in tokens)
 
 
