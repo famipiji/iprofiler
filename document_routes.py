@@ -5112,7 +5112,7 @@ def export_to_ivault(doc_id):
         form_data[f"{p}[classId]"]      = record_type_id
         form_data[f"{p}[propertyId]"]   = prop.get("propertyId", "")
         form_data[f"{p}[propertyType]"] = str(prop.get("type", 0))
-        form_data[f"{p}[value]"]        = _match_value(prop.get("propertyName", ""))
+        form_data[f"{p}[value]"]        = ivault_property_value(_match_value(prop.get("propertyName", "")), prop.get("type", 0))
 
     print(f"[iVault] uploading to: {api_base}/document/upload")
     print(f"[iVault] file: {display_name} ({file_size} bytes, {mime})")
@@ -5193,6 +5193,48 @@ def export_to_ivault(doc_id):
 
 # ?????? POST /api/documents/ivault/import ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 
+# iVault classPropertyModels "type" for a Date property. Not in iVault docs -
+# taken from a real synced class (2026-11-04: the property "Date" came back as
+# type 3; Text properties are 0, Number 1 - see settings_routes).
+IVAULT_DATE_PROPERTY_TYPE = 3
+
+
+def _ivault_date_format() -> str:
+    """strftime format for date values sent to iVault. ISO by default: iVault's
+    API is ASP.NET, which reads yyyy-MM-dd the same in every server culture.
+    Override with IVAULT_DATE_FORMAT (e.g. %d/%m/%Y) if a tenant needs another."""
+    return (os.environ.get("IVAULT_DATE_FORMAT") or "%Y-%m-%d").strip()
+
+
+def _date_order() -> str:
+    """DMY (default) or MDY - which reading wins for an ambiguous date like 5/6/2026."""
+    return "MDY" if (os.environ.get("DATE_ORDER") or "").strip().upper() == "MDY" else "DMY"
+
+
+def ivault_property_value(value, property_type) -> str:
+    """The string sent as a property's [value] in an iVault upload. Date-type
+    properties get the date re-formatted (see _ivault_date_format); everything
+    else - and a date value that can't be parsed - is sent unchanged. The
+    document's stored field value is never touched."""
+    text = "" if value is None else str(value)
+    try:
+        is_date = int(property_type) == IVAULT_DATE_PROPERTY_TYPE
+    except (TypeError, ValueError):
+        is_date = False
+    if not is_date or not text.strip():
+        return text
+    from datetime import date
+    from value_check import parse_dates
+    readings = parse_dates(text)
+    if not readings:
+        print(f"[iVault] WARNING: date property value {text!r} could not be parsed - sent unchanged")
+        return text
+    # parse_dates lists an ambiguous numeric date (05/06/2026) as
+    # [day-first, month-first]; an unambiguous one has a single reading.
+    y, m, d = readings[1] if (len(readings) > 1 and _date_order() == "MDY") else readings[0]
+    return date(y, m, d).strftime(_ivault_date_format())
+
+
 def _push_fields_to_ivault(doc, doc_type, record_type_id, tenant, session, auth_header, api_base):
     """
     Push a processed Document's extracted fields to iVault as a new document
@@ -5242,7 +5284,7 @@ def _push_fields_to_ivault(doc, doc_type, record_type_id, tenant, session, auth_
         form_data[f"{p}[classId]"]      = record_type_id
         form_data[f"{p}[propertyId]"]   = field.external_property_id
         form_data[f"{p}[propertyType]"] = str(field.external_property_type or 0)
-        form_data[f"{p}[value]"]        = str(value)
+        form_data[f"{p}[value]"]        = ivault_property_value(value, field.external_property_type)
         i += 1
 
     print(f"[iVault Import] pushing to: {api_base}/document/upload")

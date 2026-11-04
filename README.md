@@ -92,6 +92,19 @@ editor that detects the encoding.
 
 ---
 
+## iVault push: date values
+
+When fields are pushed to iVault, values of **Date** properties (iVault `propertyType` 3) are
+re-formatted; the field value stored in iProfiler stays as printed on the document.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `IVAULT_DATE_FORMAT` | `%Y-%m-%d` | strftime format sent to iVault (e.g. `%d/%m/%Y`) |
+| `DATE_ORDER` | `DMY` | `DMY` or `MDY`: how to read an ambiguous date like `5/6/2026` |
+
+A value that isn't a single date (e.g. a period "October 10 to November 9", or a date without a
+year) is sent unchanged and logged as `[iVault] WARNING: date property value ... could not be parsed`.
+
 ## API Endpoints
 
 | Method | Endpoint | Description |

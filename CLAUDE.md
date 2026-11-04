@@ -75,6 +75,8 @@ On startup it seeds `DocumentType`/`DocumentField` rows from `qwen_service.FIELD
 - `OCR_TEXT_SOURCE` — `vision` (default, Compose) = Qwen Vision transcribes scanned PDFs/images; `paddle` (`start_iprofiler.bat`) = PaddleOCR text + the text model for type and fields, falling back to Vision per document when OCR is weak; its OCR lines are saved as the document's `text_blocks`.
 - `FLASK_DEBUG` — `python app.py` only; default off. `1` = Werkzeug debugger + reload on `.py` save. `start_iprofiler.bat` leaves it unset (commented `REM set FLASK_DEBUG=1`).
 - `HOST` — `python app.py` bind address; default `127.0.0.1` (this machine only). `0.0.0.0` = LAN access. Unset in `start_iprofiler.bat` (commented `REM set HOST=0.0.0.0`). Don't combine with `FLASK_DEBUG=1` on an untrusted network — the debugger executes code.
+- `DATE_ORDER` — `DMY` (default) or `MDY`: which reading wins for an ambiguous numeric date like `5/6/2026` when a date is pushed to iVault.
+- `IVAULT_DATE_FORMAT` — strftime format for values of iVault Date properties (`propertyType` 3, `document_routes.IVAULT_DATE_PROPERTY_TYPE`) on push; default `%Y-%m-%d`. `document_routes.ivault_property_value` parses the printed value with `value_check.parse_dates`; unparseable values go unchanged with an `[iVault] WARNING`. Stored field values stay as printed.
 - iVault credentials (`tenant`, `username`, `password`) are passed per-request in the sync endpoints, not stored as env vars.
 
 Switching model size is a one-line change in `qwen_service.py` (the `MODEL` constant) per the README; nothing else needs to change.
