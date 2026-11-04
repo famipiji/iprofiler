@@ -1,6 +1,6 @@
 # iProfiler — Local-run fixes — 2026-11-02
 
-## STATUS: In Progress — Tasks 0–5, 7 done (live checks 2026-11-04); 6 To Do
+## STATUS: Done — Tasks 0–7 done (live checks 2026-11-04)
 
 | Task | Status | Commit | Still pending |
 |---|---|---|---|
@@ -10,7 +10,7 @@
 | 3 | ✅ Done | Task 3 commit | Live 2026-11-04 type change round trip on doc 755 via PATCH: bank_statement → invoice (fields in 7 s) → bank_statement (16 s); PATCH answers with the new type immediately, `reextract-status` running → done, fields swapped each way |
 | 4 | ✅ Done | Task 4 commit | Java = portable Temurin 17 in `jre\` (git-ignored, on PATH via the .bat); no Java → one `[Startup]` warning, ODL skipped. `parse_odl_blocks()` walks ODL's `kids` tree. Image date highlight (`00f2601`, `static/image_highlight.js`): `test_image_highlight.py` green; browser check listed for 2026-11-04 |
 | 5 | ✅ Done | `6219886` | `paddle` on in `start_iprofiler.bat` (Compose still `vision`). First live run 47.0 s vs 306.4 s. Live 2026-11-04 not-in-document flag: doc 755 `statement_period` no longer flagged after re-extract (value_check now ignores range connectors like "to"/"until"/"sampai" the model adds between two printed parts). Optional: A/B on ~10 scanned docs incl. messy photos |
-| 6 | To Do | — | — |
+| 6 | ✅ Done | Task 6 commit | New `documents.confidence_source` (startup migration): `model` when the classify answer rated itself, `default:<route>` (`vision_thumb`, `vision_full`, `text`, `fallback`, `forced`) for the fixed per-route number; NULL for older docs. UI: defaults get a hollow grey dot + muted italic % and the tooltip "Not measured — default for this processing route (…)" (result panel, doc cards, document modal, review list). Live 2026-11-04: digital bank statement via paddle → classify rated "high" → saved 0.9 / `model` (test doc deleted after) |
 | 7 | ✅ Done | Task 7 commit | `app.py` reads `FLASK_DEBUG` (default off) and `HOST` (default `127.0.0.1`); `start_iprofiler.bat` leaves both unset with commented `REM set` examples. Verified 2026-11-04 on a spare port: default → bound `127.0.0.1`, LAN request fails, `/console` off; `HOST=0.0.0.0 FLASK_DEBUG=1` → bound `0.0.0.0`, LAN 200, debugger on. Docker unaffected (waitress in `entrypoint.sh`). Note: with the debugger off, saving a `.py` no longer auto-reloads - restart the .bat |
 
 Not from the Notion backlog. These came out of getting iProfiler running directly on the Windows

@@ -272,6 +272,7 @@ def _save_document_to_db(result: dict, original_filename: str, unique_filename: 
             document_type=final_type,
             extractedText=result.get("raw_text", ""),
             confidence=result["confidence"],
+            confidence_source=result.get("confidence_source"),
         )
         doc.set_fields(result["fields"])
         if result.get("field_sources"):
@@ -5058,7 +5059,9 @@ def export_to_ivault(doc_id):
             doc.set_fields(reextracted_fields)
             if result.get("raw_text"):
                 doc.raw_text = result["raw_text"]
-            doc.confidence = result.get("confidence", doc.confidence)
+            if "confidence" in result:
+                doc.confidence = result["confidence"]
+                doc.confidence_source = result.get("confidence_source")
             db.session.commit()
     except Exception as _sync_err:
         print(f"[iVault] Re-extraction for selected record type skipped: {_sync_err}")

@@ -266,6 +266,9 @@ class Document(db.Model):
     # guided_context steps in document_routes.py.
     ad_hoc_fields_dismissed = db.Column(db.Boolean, default=False, nullable=False)
     confidence = db.Column(db.Float)
+    # "model" or "default:<route>" (fixed per-route number, not measured) -
+    # see qwen_service.confidence_with_source. NULL for documents saved before it existed.
+    confidence_source = db.Column(db.String(40), nullable=True)
     text_blocks = db.Column(db.Text)                      # JSON list of ODL bounding boxes
     confirmed_at = db.Column(db.DateTime, nullable=True)
     pinned = db.Column(db.Boolean, default=False, nullable=False, index=True)
@@ -369,6 +372,7 @@ class Document(db.Model):
             "field_sources": self.get_field_sources(),
             "field_ambiguities": self.get_field_ambiguities(),
             "confidence": self.confidence,
+            "confidence_source": self.confidence_source,
             "created_at": self.created_at.isoformat() + 'Z',
             "unique_upload_filename": self.unique_upload_filename,
             "storage_key": self.storage_key,

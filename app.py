@@ -267,6 +267,11 @@ with app.app_context():
         print(f"[Migration] ERROR adding field_sources column to documents: {e}")
     try:
         with db.engine.connect() as conn:
+            _add_column_if_missing(conn, "documents", "confidence_source", "VARCHAR(40)")
+    except Exception as e:
+        print(f"[Migration] ERROR adding confidence_source column to documents: {e}")
+    try:
+        with db.engine.connect() as conn:
             _add_column_if_missing(conn, "document_types", "is_builtin", "BOOLEAN NOT NULL DEFAULT 0")
     except Exception as e:
         print(f"[Migration] ERROR adding is_builtin column: {e}")

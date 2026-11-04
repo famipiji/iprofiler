@@ -399,25 +399,58 @@ MAX_SPLIT_PDF_PAGES = int(os.environ.get("MAX_SPLIT_PDF_PAGES", "200"))
 
 CONFIDENCE_MAP = {"high": 0.90, "medium": 0.65, "low": 0.35}
 
-def normalize_confidence(raw, source="text"):
-    SOURCE_DEFAULTS = {"vision_thumb": 0.90, "vision_full": 0.85, "text": 0.65, "fallback": 0.35}
-    if raw is None:
-        return SOURCE_DEFAULTS.get(source, 0.65)
-    if isinstance(raw, float):
-        return max(0.0, min(1.0, raw))
+SOURCE_DEFAULTS = {"vision_thumb": 0.90, "vision_full": 0.85, "text": 0.65, "fallback": 0.35}
+
+# confidence_source values: "model" = the model stated it (classify answer's
+# "confidence"); "default:<route>" = a fixed number for the processing route
+# (no model rating exists or it was unusable) - not a measured accuracy, and
+# the UI shows it differently (local-run fixes Task 6).
+CONFIDENCE_FROM_MODEL = "model"
+
+
+def default_confidence_source(route: str) -> str:
+    return f"default:{route}"
+
+
+def _parse_confidence(raw):
+    """A 0..1 score from a model-supplied confidence, or None if unusable."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return max(0.0, min(1.0, float(raw)))
     raw_str = str(raw).lower().strip()
     if raw_str.endswith("%"):
         try:
             return max(0.0, min(1.0, float(raw_str[:-1]) / 100))
         except ValueError:
-            pass
+            return None
     if raw_str in CONFIDENCE_MAP:
         return CONFIDENCE_MAP[raw_str]
     try:
         return max(0.0, min(1.0, float(raw_str)))
     except ValueError:
-        pass
-    return SOURCE_DEFAULTS.get(source, 0.65)
+        return None
+
+
+def confidence_with_source(raw, source="text"):
+    """(score, confidence_source) for a model-supplied confidence `raw`; the
+    route default for `source` (and "default:<source>") when raw is missing or
+    unusable."""
+    score = _parse_confidence(raw)
+    if score is None:
+        return SOURCE_DEFAULTS.get(source, 0.65), default_confidence_source(source)
+    return score, CONFIDENCE_FROM_MODEL
+
+
+def normalize_confidence(raw, source="text"):
+    return confidence_with_source(raw, source)[0]
+
+
+def _classify_confidence(cls_result: dict):
+    """(score, source) from a classify_document() result."""
+    if cls_result.get("confidence_source"):
+        return cls_result.get("confidence"), cls_result["confidence_source"]
+    return confidence_with_source(cls_result.get("confidence"), source="text")
 
 def format_confidence(score):
     return f"{round(score * 100)}%"
@@ -1478,10 +1511,10 @@ def classify_document(raw_text: str, hint_type: str = None) -> dict:
         print(f"[Classify] Unparseable answer: {raw[:300]}")
         result = result if isinstance(result, dict) else {}
         doc_type = hint_type or "unknown"
-        confidence = normalize_confidence(None, source="fallback")
+        confidence, confidence_source = confidence_with_source(None, source="fallback")
     else:
         doc_type = result["document_type"]
-        confidence = normalize_confidence(result.get("confidence"), source="text")
+        confidence, confidence_source = confidence_with_source(result.get("confidence"), source="text")
 
     # Normalize to snake_case
     doc_type = doc_type.lower().strip().replace(" ", "_").replace("-", "_")
@@ -1491,6 +1524,7 @@ def classify_document(raw_text: str, hint_type: str = None) -> dict:
     return {
         "document_type": doc_type,
         "confidence":    confidence,
+        "confidence_source": confidence_source,
     }
 
 
@@ -3734,7 +3768,7 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
 
             ocr_done = False
             document_type = "other"
-            confidence = normalize_confidence(None, source="fallback")
+            confidence, confidence_source = confidence_with_source(None, source="fallback")
 
             # OCR-only prompt for pages 2+ (type already known from page 1)
             ocr_only_prompt = (
@@ -3841,7 +3875,8 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                     ]
 
                     raw_text = "\n\n".join(all_pages_text)
-                    confidence = normalize_confidence("high", source="vision_thumb")
+                    # No rating in this call's answer - fixed route value (0.90).
+                    confidence, confidence_source = CONFIDENCE_MAP["high"], default_confidence_source("vision_thumb")
                     scanned_pages = ocr_pages  # save for bbox extraction later
                     print(f"[Pipeline] Classified as: {document_type} | Total OCR: {len(raw_text)} chars ({len(ocr_pages)} pages)")
                     ocr_done = True
@@ -3875,7 +3910,7 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
             # ?????? NORMAL PDF PATH: Use text extraction + text model ??????????????????????????????????????????????????????????????????
             if forced_document_type:
                 document_type = forced_document_type
-                confidence = normalize_confidence("high", source="forced")
+                confidence, confidence_source = CONFIDENCE_MAP["high"], default_confidence_source("forced")
                 print(f"[Pipeline] Step 2: Forced document type: {document_type} (skipping classification)")
             else:
                 print("[Pipeline] Step 2: Normal PDF detected ??? classifying from extracted text...")
@@ -3883,7 +3918,7 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                 _set_lm_slot("Classifying...", 0.0, 1.5)
                 cls_result = classify_document(raw_text)
                 document_type = cls_result.get("document_type", "other")
-                confidence = normalize_confidence(cls_result.get("confidence"), source="text")
+                confidence, confidence_source = _classify_confidence(cls_result)
                 print(f"[Pipeline] Classified as: {document_type}")
 
     elif OCR_TEXT_SOURCE == "paddle" and (_ocr_result := _ocr_text_for_image(image_path)):
@@ -3891,13 +3926,13 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
         raw_text, _ocr_blocks = _ocr_result
         if forced_document_type:
             document_type = forced_document_type
-            confidence = normalize_confidence("high", source="forced")
+            confidence, confidence_source = CONFIDENCE_MAP["high"], default_confidence_source("forced")
             print(f"[Pipeline] Forced document type: {document_type}")
         else:
             _set_lm_slot("Classifying...", 0.0, 1.5)
             cls_result = classify_document(raw_text)
             document_type = cls_result.get("document_type", "other")
-            confidence = normalize_confidence(cls_result.get("confidence"), source="text")
+            confidence, confidence_source = _classify_confidence(cls_result)
             print(f"[Pipeline] Classified as: {document_type}")
 
     else:
@@ -3948,7 +3983,7 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
             print(f"[Pipeline] Classified as: {document_type}")
         print(f"[Pipeline] Total extracted: {len(raw_text)} characters")
 
-        confidence = normalize_confidence("high", source="vision_full")
+        confidence, confidence_source = CONFIDENCE_MAP["high"], default_confidence_source("vision_full")
 
     print(f"[Pipeline] Total extracted: {len(raw_text)} characters")
     print(f"[Pipeline] Type: {document_type} | Confidence: {confidence}")
@@ -4055,7 +4090,7 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
                 fields = extract_fields_vision(fb_b64, fb_mt, document_type, raw_text=raw_text)
                 if fields:
                     print(f"[Pipeline] ??? Vision fallback extracted {len(fields)} fields at {dpi_try} DPI")
-                    confidence = normalize_confidence("high", source="vision_full")
+                    confidence, confidence_source = CONFIDENCE_MAP["high"], default_confidence_source("vision_full")
                     break
                 print(f"[Pipeline] Vision fallback at {dpi_try} DPI returned empty, trying lower...")
             except Exception as vfb_err:
@@ -4341,6 +4376,7 @@ def process_document(image_path: str, forced_document_type: str = None) -> dict:
         "raw_text":      raw_text,
         "document_type": document_type,
         "confidence":    confidence,
+        "confidence_source": confidence_source,
         "fields":        fields,
         "field_sources": field_sources,
         "field_alias_conflicts": field_alias_conflicts,
@@ -4745,6 +4781,7 @@ def process_split_pdf(pdf_path: str, upload_folder: str) -> list:
                 "raw_text":          "",
                 "document_type":     group_type,
                 "confidence":        0.35,
+                "confidence_source": "default:fallback",
                 "fields":            {},
                 "text_blocks":       [],
                 "_sub_pdf_filename": sub_filename if os.path.exists(sub_pdf_path) else None,
@@ -5047,6 +5084,7 @@ def process_barcode_split_pdf(pdf_path: str, upload_folder: str) -> list:
                     "raw_text":          "",
                     "document_type":     "unknown",
                     "confidence":        0.35,
+                    "confidence_source": "default:fallback",
                     "fields":            {},
                     "text_blocks":       [],
                     "_sub_pdf_filename": sub_filename if os.path.exists(sub_pdf_path) else None,
@@ -5189,6 +5227,7 @@ def process_mrn_barcode_split_pdf(pdf_path: str, upload_folder: str) -> list:
                     "raw_text":          "",
                     "document_type":     "unknown",
                     "confidence":        0.35,
+                    "confidence_source": "default:fallback",
                     "fields":            {},
                     "text_blocks":       [],
                     "_sub_pdf_filename": sub_filename if os.path.exists(sub_pdf_path) else None,
